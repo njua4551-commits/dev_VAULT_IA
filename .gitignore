@@ -1,0 +1,37 @@
+# Secretos y estado local (nunca subir)
+.dev-vault/
+config.json
+state.json
+*.key
+.env
+.env.*
+secrets.*
+
+# Kaggle
+.kaggle/
+kaggle.json
+access_token
+
+# Salidas y datasets del vault
+kernel-output/
+kaggle-bin-dataset/
+kaggle-config-dataset/
+kaggle-notebook/
+build-kernel/
+*.log
+
+# Binarios y artefactos
+dist/
+*.exe
+*.test
+*.out
+
+# Python / notebooks
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Sistema
+.DS_Store
+Thumbs.db

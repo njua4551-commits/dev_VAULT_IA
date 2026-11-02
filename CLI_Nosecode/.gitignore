@@ -1,0 +1,19 @@
+# Binarios y artefactos de build
+dist/
+*.exe
+nosecode-linux-amd64
+nosecode-darwin-*
+*.test
+*.out
+
+# Config local (nunca debe subirse)
+config.json
+.nosecode/
+.env
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

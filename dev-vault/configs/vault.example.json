@@ -1,0 +1,14 @@
+{
+  "user": "TU_USUARIO_KAGGLE",
+  "slug": "dev-vault-qwen",
+  "api_key": "GENERA_UNA_CLAVE_LARGA_Y_UNICA",
+  "ntfy_topic": "vault-tu-tema-unico",
+  "tunnel": "auto",
+  "idle_minutes": 30,
+  "max_hours": 8,
+  "ngrok_token": "",
+  "ngrok_domain": "",
+  "ts_authkey": "",
+  "ts_hostname": "kaggle-ia",
+  "ts_mode": "funnel"
+}

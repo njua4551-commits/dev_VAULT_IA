@@ -1,0 +1,20 @@
+# Secretos
+.env
+*.key
+secrets.*
+
+# Modelos y salidas pesadas
+*.gguf
+*.bin
+*.safetensors
+ollama.log
+proxy.log
+
+# Jupyter / Python
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Sistema
+.DS_Store
+Thumbs.db
