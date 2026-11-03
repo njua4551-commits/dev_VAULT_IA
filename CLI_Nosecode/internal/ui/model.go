@@ -133,6 +133,7 @@ type Model struct {
 	mcpTools   []mcp.Tool
 	mcpErrs    []string
 	mcpLoading bool
+	quota      quotaState
 	tool       toolConfirmState
 	sel        selectState
 	buf        *screenBuffer
@@ -194,7 +195,9 @@ func newModel(cfg *config.Config, withSessions bool) Model {
 }
 
 // Init implementa tea.Model.
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(m.fetchQuota(), quotaTickCmd())
+}
 
 // Update implementa tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -224,6 +227,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case vaultMsg:
 		return m.onVault(msg)
+	case quotaMsg:
+		return m.onQuota(msg), nil
+	case quotaTickMsg:
+		if m.quota.loading {
+			return m, quotaTickCmd()
+		}
+		m.quota.loading = true
+		return m, tea.Batch(fetchQuotaCmd(), quotaTickCmd())
 	}
 
 	var cmd tea.Cmd

@@ -222,7 +222,7 @@ func (m Model) onVault(msg vaultMsg) (tea.Model, tea.Cmd) {
 	}
 	m = m.saveActive()
 	m.layout()
-	return m, nil
+	return m, m.fetchQuota()
 }
 
 // cancelBusy corta la respuesta o el comando en curso.

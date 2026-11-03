@@ -466,6 +466,15 @@ func (m Model) railLines(height int) []uiLine {
 	add(mutedStyle.Render(fit(valueOr(p.Model, "sin modelo"), cw)), whole("settings", "0"))
 	add("")
 
+	if name == "vault" {
+		add(titleStyle.Render("Kaggle GPU"))
+		add(m.quotaLabel())
+		if m.quota.ok {
+			add(mutedStyle.Render(fmt.Sprintf("de %s h · reset semanal", formatQuotaHours(m.quota.q.TotalHours))))
+		}
+		add("")
+	}
+
 	plusStyle := mutedStyle
 	if m.isHover("new", "") {
 		plusStyle = primaryStyle
@@ -755,6 +764,9 @@ func (m Model) statusLine() uiLine {
 	parts := []string{}
 	if m.cfg.UI.Tokens && !m.sidebarVisible() && len(m.msgs) > 0 {
 		parts = append(parts, mutedStyle.Render(m.contextLabel()))
+	}
+	if name == "vault" {
+		parts = append(parts, m.quotaLabel())
 	}
 	parts = append(parts,
 		keyHint("ctrl+p", "comandos"),
