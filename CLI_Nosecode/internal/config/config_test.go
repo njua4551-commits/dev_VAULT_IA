@@ -99,8 +99,8 @@ func TestImportVault(t *testing.T) {
 
 func TestMaskKey(t *testing.T) {
 	cases := map[string]string{
-		"":                    "sin configurar",
-		"abc":                 "•••",
+		"":                         "sin configurar",
+		"abc":                      "•••",
 		"api-key-1234567890abcdef": "api-••••••••cdef",
 	}
 	for in, want := range cases {

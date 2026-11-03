@@ -2,10 +2,13 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"time"
 
 	"nosecode/internal/api"
 	"nosecode/internal/config"
+	"nosecode/internal/debuglog"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -93,15 +96,18 @@ func (m Model) startChat() (Model, tea.Cmd) {
 		model = "default"
 	}
 	s := api.Stream(context.Background(), api.Request{
-		Bases:    api.Bases(p.BaseURL, config.VaultHome()),
-		APIKey:   p.APIKey,
-		Model:    model,
-		Messages: apiMessages(m.msgs, m.mode == "plan"),
+		Bases:       api.Bases(p.BaseURL, config.VaultHome()),
+		APIKey:      p.APIKey,
+		Model:       model,
+		Messages:    apiMessages(m.msgs, m.mode == "plan"),
+		IdleTimeout: 120 * time.Second,
 	})
 	m.run.stream = s
 	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
+	var tick tea.Cmd
+	m, tick = m.startActivity("model", "")
 	m.toast, m.toastErr = "Escribiendo… (esc cancela)", false
-	return m, waitChunk(s)
+	return m, tea.Batch(waitChunk(s), tick)
 }
 
 func (m Model) lastIdx() int { return len(m.msgs) - 1 }
@@ -114,6 +120,9 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	i := m.lastIdx()
 	if c.Text != "" {
 		m.msgs[i].Text += c.Text
+		if m.activity.kind == "model" {
+			m.activity.kind = "stream"
+		}
 		m.scroll = 0
 		m.layout()
 	}
@@ -121,6 +130,7 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 		return m, waitChunk(msg.s)
 	}
 
+	m = m.stopActivity()
 	m.run.stream = nil
 	switch {
 	case c.Err == nil:
@@ -134,6 +144,14 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.msgs[i].Text) == "" {
 			m.msgs[i].Text = "(cancelado)"
 		}
+	case errors.Is(c.Err, api.ErrModelIdle):
+		m.toast, m.toastErr = "El modelo no respondió a tiempo", true
+		if strings.TrimSpace(m.msgs[i].Text) == "" {
+			m.msgs[i].Text = "⚠ " + c.Err.Error() + "\n\n¿Está encendida la IA? Usa /up."
+		} else {
+			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
+		}
+		m.sound(soundError)
 	default:
 		m.toast, m.toastErr = "Error: "+c.Err.Error(), true
 		if strings.TrimSpace(m.msgs[i].Text) == "" {
@@ -209,13 +227,19 @@ func (m Model) onVault(msg vaultMsg) (tea.Model, tea.Cmd) {
 
 // cancelBusy corta la respuesta o el comando en curso.
 func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
+	debuglog.Logf("turn cancel agent=%v stream=%v vault=%v", m.run.agent != nil, m.run.stream != nil, m.run.vault != nil)
 	if m.run.agent != nil {
+		if m.run.agent.cancel != nil {
+			m.run.agent.cancel()
+		}
 		if m.run.agent.stream != nil {
 			m.run.agent.stream.Cancel()
 		}
 		m = m.clearConnecting()
 		m.run.agent = nil
+		m.tool = toolConfirmState{}
 		m.screen = screenChat
+		m = m.stopActivity()
 		m.toast, m.toastErr = "Agente cancelado", false
 	}
 	if m.run.stream != nil {
@@ -224,6 +248,7 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 		if i := m.lastIdx(); i >= 0 && strings.TrimSpace(m.msgs[i].Text) == "" {
 			m.msgs[i].Text = "(cancelado)"
 		}
+		m = m.stopActivity()
 		m.toast, m.toastErr = "Respuesta cancelada", false
 	}
 	if m.run.vault != nil {
@@ -238,8 +263,13 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 
 // cancelAll se usa al salir.
 func (m Model) cancelAll() {
-	if m.run.agent != nil && m.run.agent.stream != nil {
-		m.run.agent.stream.Cancel()
+	if m.run.agent != nil {
+		if m.run.agent.cancel != nil {
+			m.run.agent.cancel()
+		}
+		if m.run.agent.stream != nil {
+			m.run.agent.stream.Cancel()
+		}
 	}
 	if m.run.stream != nil {
 		m.run.stream.Cancel()

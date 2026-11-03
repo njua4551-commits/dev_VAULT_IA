@@ -103,7 +103,10 @@ Dentro de la TUI:
 - `/up`, `/down`, `/urls` y `/status` ejecutan `vault.py` sin congelar la interfaz.
 - `/mcp import` copia tus servidores MCP desde `~/.config/opencode/opencode.json`.
 - `/mcp tools` muestra las herramientas conectadas; `/agent on|off` activa el agente.
-- Arrastra el ratón para seleccionar y copiar; `ctrl+y` o `ctrl+c` copian la última respuesta.
+- Las sesiones aparecen como pestañas: cambia, cierra o crea desde la barra superior.
+- Arrastra el ratón para seleccionar por caracteres y copiar; doble clic toma una
+  palabra y triple clic el cuerpo del mensaje. `ctrl+y` copia la última respuesta
+  y `ctrl+c` la selección. `/copy` guarda aparte los bloques de código.
 - `F8` pide confirmación y apaga la IA en Kaggle. `ctrl+q` sale de Nosecode.
 
 ## Agente con MCP

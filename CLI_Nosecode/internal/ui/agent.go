@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,10 @@ import (
 	"time"
 
 	"nosecode/internal/api"
+	"nosecode/internal/browser"
 	"nosecode/internal/config"
+	"nosecode/internal/debuglog"
+	"nosecode/internal/images"
 	"nosecode/internal/mcp"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,8 +24,64 @@ import (
 
 const (
 	toolTag       = "Herramienta · "
-	maxAgentSteps = 8
+	maxAgentSteps = 12
 )
+
+// toolFailureGuard corta las llamadas repetidas a una herramienta que falla
+// dos veces seguidas con el mismo error.
+type toolFailureGuard struct {
+	lastWire string
+	lastErr  string
+	count    int
+	blocked  map[string]string
+}
+
+func (g *toolFailureGuard) fail(wire, errText string) bool {
+	key := errorKey(errText)
+	if g.lastWire == wire && g.lastErr == key {
+		g.count++
+	} else {
+		g.lastWire, g.lastErr, g.count = wire, key, 1
+	}
+	if g.count < 2 {
+		return false
+	}
+	if g.blocked == nil {
+		g.blocked = map[string]string{}
+	}
+	g.blocked[wire] = key
+	return true
+}
+
+func (g *toolFailureGuard) success(wire string) {
+	if g.lastWire == wire {
+		g.lastWire, g.lastErr, g.count = "", "", 0
+	}
+}
+
+func (g *toolFailureGuard) blockedReason(wire string) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	reason, ok := g.blocked[wire]
+	return reason, ok
+}
+
+func errorKey(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 180 {
+		s = s[:180] + "…"
+	}
+	return s
+}
+
+func (a *agentRun) beginStep() bool {
+	if a.steps >= maxAgentSteps {
+		return false
+	}
+	a.steps++
+	return true
+}
 
 const mcpConnectingText = "⏳ Conectando herramientas MCP…"
 
@@ -46,9 +106,10 @@ type mcpReadyMsg struct {
 }
 
 type toolDoneMsg struct {
-	call   api.ToolCall
-	result mcp.Result
-	err    error
+	call     api.ToolCall
+	result   mcp.Result
+	err      error
+	duration time.Duration
 }
 
 func (m Model) useAgent() bool {
@@ -64,9 +125,12 @@ func (m Model) startAgent() (Model, tea.Cmd) {
 		}
 		m.mcpLoading = true
 		m.run.agent = &agentRun{connecting: true}
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: mcpConnectingText})
+		n := len(m.cfg.MCP.Servers)
+		m.msgs = append(m.msgs, Message{Role: "assistant",
+			Text: fmt.Sprintf("%s (%d servidores)", mcpConnectingText, n)})
 		m.scroll = 0
 		m.toast, m.toastErr = "Conectando herramientas MCP… (máx. 8 s por servidor)", false
+		debuglog.Logf("mcp connect start servers=%d", n)
 		m.layout()
 		return m, connectMCPCmd(m.cfg.MCP.Servers)
 	}
@@ -94,9 +158,10 @@ func (m Model) onMCPReady(msg mcpReadyMsg) (tea.Model, tea.Cmd) {
 	m.mcp = msg.manager
 	m.mcpTools = msg.tools
 	m.mcpErrs = msg.errs
+	debuglog.Logf("mcp ready tools=%d servers=%d errors=%d", len(msg.tools), mcpServerCount(msg.manager), len(msg.errs))
 	if m.run.agent == nil {
 		if len(m.mcpTools) > 0 {
-			m.toast = fmt.Sprintf("%d herramientas MCP listas", len(m.mcpTools))
+			m.toast = mcpReadyToast(msg.tools, msg.errs, msg.manager)
 		}
 		return m, nil
 	}
@@ -106,11 +171,7 @@ func (m Model) onMCPReady(msg mcpReadyMsg) (tea.Model, tea.Cmd) {
 		return m.startChat()
 	}
 	m.run.agent = &agentRun{}
-	if len(msg.errs) > 0 {
-		m.toast = fmt.Sprintf("%d herramientas MCP · %d servidor(es) con error", len(m.mcpTools), len(msg.errs))
-	} else {
-		m.toast = fmt.Sprintf("%d herramientas MCP listas", len(m.mcpTools))
-	}
+	m.toast = mcpReadyToast(msg.tools, msg.errs, msg.manager)
 	return m.beginAgent()
 }
 
@@ -127,6 +188,14 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 		return m, nil
 	}
 	a.connecting = false
+	if a.ctx == nil {
+		a.ctx, a.cancel = context.WithCancel(context.Background())
+	}
+	if !a.beginStep() {
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: fmt.Sprintf(
+			"⚠ El agente alcanzó el límite de %d pasos por mensaje. Revisa el resultado y continúa con otro mensaje.", maxAgentSteps)})
+		return m.finishAgent(), nil
+	}
 	if len(a.msgs) == 0 {
 		history := apiMessages(m.msgs, false)
 		a.msgs = append([]api.ChatMessage{{Role: "system", Content: agentSystem}}, history...)
@@ -136,26 +205,35 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 	if model == "" {
 		model = "default"
 	}
-	s := api.Stream(context.Background(), api.Request{
-		Bases:    api.Bases(p.BaseURL, config.VaultHome()),
-		APIKey:   p.APIKey,
-		Model:    model,
-		Messages: a.msgs,
-		Tools:    m.apiTools(),
+	s := api.Stream(a.ctx, api.Request{
+		Bases:       api.Bases(p.BaseURL, config.VaultHome()),
+		APIKey:      p.APIKey,
+		Model:       model,
+		Messages:    a.msgs,
+		Tools:       m.apiTools(),
+		IdleTimeout: 120 * time.Second,
 	})
 	a.stream = s
 	a.assistant = ""
 	a.calls = nil
+	debuglog.Logf("model request step=%d msgs=%d tools=%d", a.steps, len(a.msgs), len(m.apiTools()))
 	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
+	var tick tea.Cmd
+	m, tick = m.startActivity("model", "")
 	m.toast, m.toastErr = "Agente trabajando… (esc cancela)", false
 	m.scroll = 0
 	m.layout()
-	return m, waitChunk(s)
+	return m, tea.Batch(waitChunk(s), tick)
 }
 
 func (m Model) apiTools() []api.ToolDef {
 	out := make([]api.ToolDef, 0, len(m.mcpTools))
 	for _, t := range m.mcpTools {
+		if a := m.run.agent; a != nil {
+			if _, blocked := a.failures.blockedReason(t.Wire); blocked {
+				continue
+			}
+		}
 		schema := t.Schema
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -182,6 +260,9 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	if c.Text != "" {
 		a.assistant += c.Text
 		m.msgs[i].Text += c.Text
+		if m.activity.kind == "model" {
+			m.activity.kind = "stream"
+		}
 		m.scroll = 0
 		m.layout()
 	}
@@ -193,6 +274,7 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 		return m, waitChunk(msg.s)
 	}
 
+	m = m.stopActivity()
 	a.stream = nil
 	a.msgs = append(a.msgs, api.ChatMessage{
 		Role:      "assistant",
@@ -205,9 +287,14 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	a.calls = nil
 
 	if c.Err != nil {
-		if c.Err == api.ErrCanceled {
+		debuglog.Logf("model error: %s", oneLine(c.Err.Error(), 200))
+		switch {
+		case c.Err == api.ErrCanceled:
 			m.toast, m.toastErr = "Agente cancelado", false
-		} else {
+		case errors.Is(c.Err, api.ErrModelIdle):
+			m.toast, m.toastErr = "El modelo no respondió a tiempo", true
+			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
+		default:
 			m.toast, m.toastErr = "Error del agente: "+c.Err.Error(), true
 			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
 		}
@@ -292,12 +379,124 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		call.ID = fmt.Sprintf("call_%d_%d", a.rounds, a.pendingIdx)
 		a.pending[a.pendingIdx] = call
 	}
-	m.toast = "Ejecutando " + shortTool(call.Function.Name) + "…"
-	return m, func() tea.Msg {
-		args := json.RawMessage(call.Function.Arguments)
-		res, err := m.mcp.Call(context.Background(), call.Function.Name, args)
-		return toolDoneMsg{call: call, result: res, err: err}
+	if !a.beginStep() {
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: fmt.Sprintf(
+			"⚠ El agente alcanzó el límite de %d pasos por mensaje. Revisa el resultado y continúa con otro mensaje.", maxAgentSteps)})
+		return m.finishAgent(), nil
 	}
+	if reason, blocked := a.failures.blockedReason(call.Function.Name); blocked {
+		m = m.appendToolResult(call, "herramienta no disponible, no la reintentes: "+reason, nil, true)
+		a.pendingIdx++
+		return m.executeNextTool()
+	}
+
+	var tick tea.Cmd
+	m, tick = m.startActivity("tool", shortTool(call.Function.Name))
+	m.toast = "Ejecutando " + shortTool(call.Function.Name) + "…"
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	mgr := m.mcp
+	servers := m.cfg.MCP.Servers
+	browserTool := isBrowserTool(call.Function.Name)
+	debuglog.Logf("tool start name=%s browser=%v", call.Function.Name, browserTool)
+	cmd := func() tea.Msg {
+		start := time.Now()
+		if mgr == nil {
+			return toolDoneMsg{call: call, err: errors.New("MCP no conectado"), duration: time.Since(start)}
+		}
+		if browserTool {
+			if err := browser.EnsureDefault(servers); err != nil {
+				return toolDoneMsg{call: call, err: fmt.Errorf("navegador: %w", err), duration: time.Since(start)}
+			}
+		}
+		args := json.RawMessage(call.Function.Arguments)
+		res, err := mgr.Call(ctx, call.Function.Name, args)
+		return toolDoneMsg{call: call, result: res, err: err, duration: time.Since(start)}
+	}
+	return m, tea.Batch(cmd, tick)
+}
+
+func (m Model) appendToolResult(call api.ToolCall, text string, imgs []api.ContentPart, isErr bool) Model {
+	a := m.run.agent
+	if a == nil {
+		return m
+	}
+	a.msgs = append(a.msgs, api.ChatMessage{
+		Role:       "tool",
+		Content:    text,
+		ToolCallID: call.ID,
+	})
+	if len(imgs) > 0 {
+		parts := make([]api.ContentPart, 0, len(imgs)+1)
+		parts = append(parts, api.ContentPart{
+			Type: "text",
+			Text: "Imagen devuelta por la herramienta " + shortTool(call.Function.Name) + ".",
+		})
+		parts = append(parts, imgs...)
+		a.msgs = append(a.msgs, api.ChatMessage{Role: "user", Content: parts})
+		pruneOldImages(a.msgs, 2)
+	}
+	label := shortTool(call.Function.Name)
+	preview := oneLine(text, 360)
+	if isErr {
+		preview = "⚠ " + preview
+	}
+	m.msgs = append(m.msgs, Message{Role: "assistant", Text: toolTag + label + "\n" + preview})
+	m.scroll = 0
+	m.layout()
+	return m
+}
+
+// pruneOldImages deja solo las ultimas `keep` imagenes en el historial. Las
+// anteriores conservan su texto y un aviso, para no reenviar capturas viejas.
+func pruneOldImages(msgs []api.ChatMessage, keep int) {
+	seen := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		parts, ok := msgs[i].Content.([]api.ContentPart)
+		if !ok {
+			continue
+		}
+		hasImage := false
+		for _, p := range parts {
+			if p.Type == "image_url" && p.ImageURL != nil {
+				hasImage = true
+				break
+			}
+		}
+		if !hasImage {
+			continue
+		}
+		seen++
+		if seen <= keep {
+			continue
+		}
+		out := make([]api.ContentPart, 0, len(parts))
+		for _, p := range parts {
+			if p.Type == "image_url" {
+				continue
+			}
+			out = append(out, p)
+		}
+		out = append(out, api.ContentPart{Type: "text", Text: "[imagen anterior omitida para ahorrar contexto]"})
+		msgs[i].Content = out
+	}
+}
+
+func mcpServerCount(mgr *mcp.Manager) int {
+	if mgr == nil {
+		return 0
+	}
+	return len(mgr.Servers())
+}
+
+func mcpReadyToast(tools []mcp.Tool, errs []string, mgr *mcp.Manager) string {
+	text := fmt.Sprintf("%d herramientas MCP listas · %d servidores", len(tools), mcpServerCount(mgr))
+	if len(errs) > 0 {
+		text += fmt.Sprintf(" · %d con error", len(errs))
+	}
+	return text
 }
 
 func (m Model) onToolDone(msg toolDoneMsg) (tea.Model, tea.Cmd) {
@@ -305,34 +504,49 @@ func (m Model) onToolDone(msg toolDoneMsg) (tea.Model, tea.Cmd) {
 	if a == nil {
 		return m, nil
 	}
+	m = m.stopActivity()
 	text := msg.result.Text
+	errText := ""
 	if msg.err != nil {
-		text = "Error: " + msg.err.Error()
+		errText = msg.err.Error()
+		text = "Error: " + errText
 		msg.result.Error = true
+	} else if msg.result.Error {
+		errText = text
 	}
+	var parts []api.ContentPart
 	for _, img := range msg.result.Images {
-		if path, err := saveToolImage(img); err == nil {
-			text += "\n[imagen guardada: " + path + "]"
+		path, part, err := prepareToolImage(img)
+		if err != nil {
+			debuglog.Logf("image error name=%s err=%s", msg.call.Function.Name, oneLine(err.Error(), 160))
+			text += "\n[imagen no procesada: " + oneLine(err.Error(), 160) + "]"
+			continue
 		}
+		text += "\n[imagen guardada: " + path + "]"
+		parts = append(parts, part)
 	}
 	if strings.TrimSpace(text) == "" {
 		text = "(sin contenido)"
 	}
-	a.msgs = append(a.msgs, api.ChatMessage{
-		Role:       "tool",
-		Content:    text,
-		ToolCallID: msg.call.ID,
-	})
-	label := shortTool(msg.call.Function.Name)
-	preview := oneLine(text, 360)
-	if msg.result.Error {
-		preview = "⚠ " + preview
+	if errText != "" {
+		if a.failures.fail(msg.call.Function.Name, errText) {
+			text += "\n[herramienta no disponible, no la reintentes]"
+			msg.result.Error = true
+		}
+	} else {
+		a.failures.success(msg.call.Function.Name)
 	}
-	m.msgs = append(m.msgs, Message{Role: "assistant", Text: toolTag + label + "\n" + preview})
-	m.scroll = 0
+	debuglog.Logf("tool done name=%s duration=%s err=%s images=%d",
+		msg.call.Function.Name, msg.duration.Round(time.Millisecond), oneLine(errText, 160), len(parts))
+	m = m.appendToolResult(msg.call, text, parts, msg.result.Error)
 	a.pendingIdx++
-	m.layout()
 	return m.executeNextTool()
+}
+
+func isBrowserTool(wire string) bool {
+	server, tool := splitWire(wire)
+	return strings.Contains(strings.ToLower(server), "playwright") ||
+		strings.HasPrefix(strings.ToLower(tool), "browser_")
 }
 
 func (m Model) continueAgent() (Model, tea.Cmd) {
@@ -341,17 +555,19 @@ func (m Model) continueAgent() (Model, tea.Cmd) {
 		return m, nil
 	}
 	a.rounds++
-	if a.rounds >= maxAgentSteps {
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: "⚠ El agente alcanzó el límite de " +
-			fmt.Sprintf("%d", maxAgentSteps) + " pasos. Revisa el resultado y continúa con otro mensaje."})
-		return m.finishAgent(), nil
-	}
 	return m.beginAgent()
 }
 
 func (m Model) finishAgent() Model {
+	if a := m.run.agent; a != nil {
+		if a.cancel != nil {
+			a.cancel()
+		}
+		debuglog.Logf("turn done steps=%d", a.steps)
+	}
 	m.run.agent = nil
 	m.screen = screenChat
+	m = m.stopActivity()
 	m.toast, m.toastErr = "", false
 	m.sound(soundDone)
 	m = m.saveActive()
@@ -366,7 +582,9 @@ func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch k.String() {
-	case "esc", "n":
+	case "esc":
+		return m.cancelBusy()
+	case "n":
 		return m.denyTools()
 	case "enter", "y":
 		m.screen = screenChat
@@ -419,8 +637,8 @@ func (m Model) toolScreen() []uiLine {
 	server, tool := splitWire(call.Function.Name)
 	head := []uiLine{{
 		text: modalTitleStyle.Render("Permiso de herramienta") +
-			spaces(maxInt(0, innerW-lipgloss.Width("Permiso de herramienta")-lipgloss.Width("esc cerrar"))) +
-			faintStyle.Render("esc cerrar"),
+			spaces(maxInt(0, innerW-lipgloss.Width("Permiso de herramienta")-lipgloss.Width("esc cancelar turno"))) +
+			faintStyle.Render("esc cancelar turno"),
 	}}
 	body := []uiLine{
 		{text: faintStyle.Render("Servidor   ") + textStyle.Render(server)},
@@ -445,7 +663,7 @@ func (m Model) toolScreen() []uiLine {
 		body[n-2].hits = []relHit{{x: 0, w: innerW, action: "toolAllowSession"}}
 		body[n-1].hits = []relHit{{x: 0, w: innerW, action: "toolDeny"}}
 	}
-	footer := "y permitir · a permitir sesión · n denegar"
+	footer := "y permitir · a sesión · n denegar · esc cancelar turno"
 	return m.centerModal(m.modalFrame(boxW, head, body, footer), boxW)
 }
 
@@ -472,17 +690,37 @@ func prettyArgs(raw string) string {
 	return string(b)
 }
 
-func saveToolImage(img mcp.Image) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(img.Data)
+// prepareToolImage convierte la captura a JPEG reducido, la guarda en disco y
+// devuelve la parte image_url que se enviara al modelo.
+func prepareToolImage(img mcp.Image) (string, api.ContentPart, error) {
+	raw, err := base64.StdEncoding.DecodeString(img.Data)
 	if err != nil {
-		return "", err
+		return "", api.ContentPart{}, err
 	}
+	mime, data, err := images.Prepare(raw, img.MIME)
+	if err != nil {
+		return "", api.ContentPart{}, err
+	}
+	path, err := saveToolImage(data, mime)
+	if err != nil {
+		return "", api.ContentPart{}, err
+	}
+	part := api.ContentPart{
+		Type: "image_url",
+		ImageURL: &api.ImageURL{
+			URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+		},
+	}
+	return path, part, nil
+}
+
+func saveToolImage(data []byte, mime string) (string, error) {
 	dir := filepath.Join(config.Home(), "tool-images")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	ext := ".png"
-	switch strings.ToLower(img.MIME) {
+	switch strings.ToLower(mime) {
 	case "image/jpeg", "image/jpg":
 		ext = ".jpg"
 	case "image/webp":

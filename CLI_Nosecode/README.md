@@ -28,6 +28,7 @@ peticiones de red.
   (Build / Plan), línea de agente · modelo · proveedor, pistas y un tip.
 - Sesiones persistentes en `~/.nosecode/sessions/*.json`.
 - Cabecera de sesión (`# título`, clic para renombrar) y mensajes en paneles.
+- Sesiones como pestañas de navegador sobre el chat: cambiar, cerrar y crear.
 - Barra lateral derecha con contexto, proveedor y sesiones: cambiar, crear y
   cerrar (también con `ctrl+p` o `/sessions`).
 - Configuración en una lista plana buscable, agrupada por categorías.
@@ -38,15 +39,15 @@ peticiones de red.
 - Importación del endpoint del Dev Vault (`~/.dev-vault`).
 - Chat con streaming SSE y comandos `/up`, `/down`, `/urls` y `/status`.
 
-Pendiente: agente y herramientas locales (Fase 3), MCP (Fase 4) y adjuntos
-multimedia (Fase 5).
+El agente MCP (modo Build), la aprobación por herramienta y el apagado visible
+del Vault ya están integrados. Pendiente: adjuntos multimedia (Fase 5).
 
 ## Instalar
 
 ### Windows
 
 ```powershell
-cd C:\ruta\a\CLI_Nosecode
+cd CLI_Nosecode
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
@@ -100,7 +101,9 @@ nosecode --version
 | `ctrl+b` | mostrar u ocultar el panel lateral |
 | `esc` | cancelar respuesta / limpiar entrada / cerrar modal |
 | `pgup` / `pgdn` | desplazar el chat |
-| `ctrl+c` | salir |
+| `ctrl+y` | copiar la última respuesta del asistente |
+| `ctrl+c` | copiar la selección (nunca cierra) |
+| `ctrl+q` | salir |
 
 En los ajustes, escribe para filtrar, `↑↓` para moverte y `enter` para
 cambiar. En la paleta, escribe para filtrar y `enter` para ejecutar.
@@ -109,21 +112,29 @@ cambiar. En la paleta, escribe para filtrar y `enter` para ejecutar.
 
 | Zona | Acción |
 | --- | --- |
+| pestaña de sesión | cambiar de sesión |
+| `×` de la pestaña activa | cerrar sesión |
+| `+` de las pestañas o de «Sesiones» | nueva sesión |
 | sesión en la barra lateral | cambiar de sesión |
 | `×` de la sesión activa | cerrar sesión |
-| `+` junto a «Sesiones» | nueva sesión |
 | título (cabecera o lateral) | renombrar sesión |
 | agente en el prompt | alternar Plan / Build |
 | modelo / proveedor | abrir ajustes |
 | fila de ajuste | activar, editar o cambiar |
 | botones del modal | guardar, cancelar, importar |
+| arrastrar sobre el chat | seleccionar por caracteres y copiar |
+| doble / triple clic | palabra / cuerpo del mensaje |
 | rueda | desplazar el chat |
 
 ### Comandos
 
-`/settings`, `/model [nombre]`, `/sessions`, `/tokens`, `/sound`, `/theme`,
-`/vault`, `/up`, `/down`, `/urls`, `/status`, `/config`, `/new`, `/help`,
-`/quit`.
+`/settings`, `/model [nombre]`, `/sessions`, `/copy [code [n]|files]`,
+`/tokens`, `/sound`, `/theme`, `/mcp`, `/agent`, `/vault`, `/up`, `/down`,
+`/urls`, `/status`, `/config`, `/new`, `/help`, `/quit`.
+
+`/copy` copia la última respuesta completa y guarda sus bloques de código en
+`~/.nosecode/copies`; `/copy code [n]` copia un bloque y `/copy files` los
+guarda sin tocar el portapapeles.
 
 ### Chat con streaming
 
@@ -141,7 +152,7 @@ carpeta actual o una copia local de `dev-vault`.
 
 Cada conversación se guarda en `~/.nosecode/sessions/<id>.json` con permisos
 `0600`. Al arrancar se retoma la sesión usada más recientemente y todas
-aparecen en la barra lateral y en `/sessions`. Cerrar una sesión borra su archivo; siempre
+aparecen como pestañas, en la barra lateral y en `/sessions`. Cerrar una sesión borra su archivo; siempre
 queda al menos una sesión abierta.
 
 `NOSECODE_HOME` cambia la carpeta de datos.

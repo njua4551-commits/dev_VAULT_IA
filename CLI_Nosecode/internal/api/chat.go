@@ -15,15 +15,29 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// ChatMessage es un turno enviado al modelo.
+// ChatMessage es un turno enviado al modelo. Content es string para texto o
+// []ContentPart cuando incluye imágenes.
 type ChatMessage struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content"`
+	Content    any        `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ContentPart es un trozo de contenido multimodal (texto o imagen).
+type ContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL apunta a una imagen, normalmente un data URI base64.
+type ImageURL struct {
+	URL string `json:"url"`
 }
 
 // ToolDef describe una herramienta para la API de OpenAI.
@@ -60,6 +74,10 @@ type ToolCallDelta struct {
 
 // ErrCanceled indica que el usuario cancelo la respuesta (esc).
 var ErrCanceled = errors.New("cancelado")
+
+// ErrModelIdle indica que el modelo dejo de enviar tokens durante demasiado
+// tiempo. El error incluye la duracion real para que la TUI pueda explicarlo.
+var ErrModelIdle = errors.New("el modelo dejo de responder")
 
 // HTTPError es una respuesta HTTP no exitosa del endpoint o del tunel.
 type HTTPError struct {
@@ -102,12 +120,15 @@ type Chunk struct {
 
 // Request describe una conversacion a enviar.
 type Request struct {
-	Bases    []string // URLs base (terminan en /v1), por orden de preferencia
-	APIKey   string
-	Model    string
-	Messages []ChatMessage
-	Tools    []ToolDef
+	Bases       []string // URLs base (terminan en /v1), por orden de preferencia
+	APIKey      string
+	Model       string
+	Messages    []ChatMessage
+	Tools       []ToolDef
+	IdleTimeout time.Duration // maximo sin tokens; 0 usa 120 s
 }
+
+const defaultModelIdle = 120 * time.Second
 
 // Streamer entrega la respuesta trozo a trozo.
 type Streamer struct {
@@ -158,6 +179,10 @@ func Stream(parent context.Context, req Request) *Streamer {
 				send(Chunk{Done: true, Base: base})
 				return
 			}
+			if errors.Is(err, ErrModelIdle) {
+				final(Chunk{Done: true, Err: err, Base: base})
+				return
+			}
 			if ctx.Err() != nil {
 				final(Chunk{Done: true, Err: ErrCanceled, Base: base})
 				return
@@ -196,6 +221,48 @@ func rawString(raw json.RawMessage) string {
 }
 
 func streamOne(ctx context.Context, base string, r Request, send func(Chunk) bool) (got bool, err error) {
+	idle := r.IdleTimeout
+	if idle <= 0 {
+		idle = defaultModelIdle
+	}
+	actx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var idleHit atomic.Bool
+	activity := make(chan struct{}, 1)
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		timer := time.NewTimer(idle)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				idleHit.Store(true)
+				cancel()
+				return
+			case <-activity:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(idle)
+			case <-stopWatch:
+				return
+			case <-actx.Done():
+				return
+			}
+		}
+	}()
+	touch := func() {
+		select {
+		case activity <- struct{}{}:
+		default:
+		}
+	}
+
 	payload := map[string]any{
 		"model":    r.Model,
 		"messages": r.Messages,
@@ -207,7 +274,7 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 	}
 	body, _ := json.Marshal(payload)
 	url := strings.TrimRight(base, "/") + "/chat/completions"
-	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	hr, err := http.NewRequestWithContext(actx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return false, err
 	}
@@ -219,6 +286,9 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 
 	resp, err := httpClient.Do(hr)
 	if err != nil {
+		if idleHit.Load() {
+			return false, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
+		}
 		return false, err
 	}
 	defer resp.Body.Close()
@@ -260,6 +330,7 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 		d := ev.Choices[0].Delta
 		if len(d.ToolCalls) > 0 {
 			got = true
+			touch()
 			calls := make([]ToolCallDelta, 0, len(d.ToolCalls))
 			for _, tc := range d.ToolCalls {
 				calls = append(calls, ToolCallDelta{
@@ -271,21 +342,37 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 				})
 			}
 			if !send(Chunk{ToolCalls: calls, Base: base}) {
-				return got, ctx.Err()
+				if idleHit.Load() {
+					return got, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
+				}
+				return got, actx.Err()
 			}
 		}
 		if t := d.Content; t != "" {
 			got = true
+			touch()
 			if !send(Chunk{Text: t, Base: base}) {
-				return got, ctx.Err()
+				if idleHit.Load() {
+					return got, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
+				}
+				return got, actx.Err()
 			}
 		}
 	}
+	if idleHit.Load() {
+		return got, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
+	}
 	if err := sc.Err(); err != nil {
+		if actx.Err() != nil && ctx.Err() == nil {
+			return got, actx.Err()
+		}
 		return got, err
 	}
-	if ctx.Err() != nil {
-		return got, ctx.Err()
+	if actx.Err() != nil {
+		if ctx.Err() != nil {
+			return got, ctx.Err()
+		}
+		return got, actx.Err()
 	}
 	return got, nil
 }

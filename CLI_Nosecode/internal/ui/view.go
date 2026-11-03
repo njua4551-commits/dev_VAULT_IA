@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"nosecode/internal/version"
 
@@ -113,7 +114,15 @@ func shiftLine(ln uiLine, x int) uiLine {
 	if x <= 0 {
 		return ln
 	}
-	out := uiLine{text: spaces(x) + ln.text}
+	out := ln
+	out.text = spaces(x) + ln.text
+	if ln.selectable {
+		out.selStart += x
+		out.selEnd += x
+	}
+	out.panelX0 += x
+	out.panelX1 += x
+	out.hits = nil
 	for _, h := range ln.hits {
 		h.x += x
 		out.hits = append(out.hits, h)
@@ -129,7 +138,8 @@ func keyHint(key, label string) string {
 // ---------------------------------------------------------------- home ---
 
 func (m Model) homeScreen() []uiLine {
-	usable := m.height - statusHeight
+	tabs := m.tabBarLines(m.width)
+	usable := m.height - statusHeight - len(tabs)
 	content := []uiLine{}
 
 	for _, l := range logoRows() {
@@ -165,6 +175,7 @@ func (m Model) homeScreen() []uiLine {
 	}
 
 	lines := make([]uiLine, 0, m.height)
+	lines = append(lines, tabs...)
 	for i := 0; i < top; i++ {
 		lines = append(lines, blankLine(m.width))
 	}
@@ -246,23 +257,25 @@ func (m Model) sessionScreen() []uiLine {
 	}
 
 	head := m.headerLines(mainW)
+	tabs := m.tabBarLines(mainW)
 	boxW := m.inputBoxWidth()
 	boxX := (mainW - boxW) / 2
 	box := m.promptBox(boxW)
 	menu := m.slashMenuLines(boxW)
-	if maxMenu := bodyRows - len(head) - len(box) - 4; len(menu) > maxMenu {
+	if maxMenu := bodyRows - len(tabs) - len(head) - len(box) - 4; len(menu) > maxMenu {
 		if maxMenu < 0 {
 			maxMenu = 0
 		}
 		menu = menu[:maxMenu]
 	}
 
-	chatH := bodyRows - len(head) - len(box) - len(menu)
+	chatH := bodyRows - len(tabs) - len(head) - len(box) - len(menu)
 	if chatH < 4 {
 		chatH = 4
 	}
 
 	main := make([]uiLine, 0, bodyRows)
+	main = append(main, tabs...)
 	main = append(main, head...)
 	main = append(main, m.chatLines(chatH, mainW)...)
 	for _, ln := range menu {
@@ -276,10 +289,8 @@ func (m Model) sessionScreen() []uiLine {
 	if m.sidebarVisible() {
 		rail := m.railLines(len(main))
 		for i, ln := range main {
-			row := uiLine{
-				text: pad(ln.text, mainW) + rail[i].text,
-				hits: append([]relHit{}, ln.hits...),
-			}
+			row := ln
+			row.text = pad(ln.text, mainW) + rail[i].text
 			for _, h := range rail[i].hits {
 				h.x += mainW
 				row.hits = append(row.hits, h)
@@ -292,6 +303,75 @@ func (m Model) sessionScreen() []uiLine {
 
 	lines = append(lines, m.statusLine())
 	return lines
+}
+
+// tabBarLines dibuja las sesiones como pestañas de navegador.
+func (m Model) tabBarLines(width int) []uiLine {
+	if len(m.sessions) == 0 || width < 24 {
+		return nil
+	}
+	const tabW = 18
+	maxTabs := (width - 4) / tabW
+	if maxTabs < 1 {
+		maxTabs = 1
+	}
+	start, end := 0, len(m.sessions)
+	if len(m.sessions) > maxTabs {
+		active := m.activeIndex()
+		if active < 0 {
+			active = 0
+		}
+		start = clamp(active-maxTabs/2, 0, len(m.sessions)-maxTabs)
+		end = start + maxTabs
+	}
+
+	line := uiLine{}
+	x := 0
+	activeStyle := lipgloss.NewStyle().Background(colElement).Foreground(colPrimary).Bold(true)
+	idleStyle := lipgloss.NewStyle().Foreground(colMuted)
+	for _, s := range m.sessions[start:end] {
+		active := s.ID == m.activeID
+		title := fit(s.Title, tabW-3)
+		label := " " + title + " "
+		style := idleStyle
+		if active {
+			style = activeStyle
+		} else if m.isHover("sessionSwitch", s.ID) {
+			style = rowSelectedStyle
+		}
+		mark := " "
+		if active {
+			mark = "×"
+		}
+		line.text += style.Render(label) + faintStyle.Render(mark)
+		if active {
+			line.hits = append(line.hits,
+				relHit{x: x, w: tabW - 1, action: "sessionSwitch", arg: s.ID},
+				relHit{x: x + tabW - 1, w: 1, action: "sessionClose", arg: s.ID},
+			)
+		} else {
+			line.hits = append(line.hits,
+				relHit{x: x, w: tabW, action: "sessionSwitch", arg: s.ID},
+			)
+		}
+		x += tabW
+	}
+	if start > 0 {
+		line.text = faintStyle.Render("…") + line.text
+		for i := range line.hits {
+			line.hits[i].x++
+		}
+		x++
+	}
+	if end < len(m.sessions) {
+		line.text += faintStyle.Render("…")
+		x++
+	}
+	if x+3 <= width {
+		line.text += lipgloss.NewStyle().Background(colElement).Foreground(colMuted).Render(" + ")
+		line.hits = append(line.hits, relHit{x: x, w: 3, action: "new"})
+	}
+	return []uiLine{line}
 }
 
 // headerLines es la cabecera de sesión de opencode: panel con «# título» y,
@@ -492,10 +572,11 @@ func (m Model) chatLines(height, width int) []uiLine {
 
 	out := make([]uiLine, 0, height)
 	for _, ln := range content[start:end] {
-		out = append(out, uiLine{text: pad(ln.text, width), hits: ln.hits})
+		ln.text = pad(ln.text, width)
+		out = append(out, ln)
 	}
 	for len(out) < height {
-		out = append(out, blankLine(width))
+		out = append(out, uiLine{panel: "chat", panelX0: 0, panelX1: width})
 	}
 	return out
 }
@@ -516,29 +597,73 @@ func (m Model) chatContent(width int) []uiLine {
 
 	agent := lipgloss.NewStyle().Foreground(m.agentColor())
 	bar := agent.Render("┃")
-	userRow := func(txt string) uiLine {
-		return uiLine{text: spaces(2) + paint(colPanel, bar+pad("  "+txt, blockW-1))}
+	blankChat := func() uiLine {
+		return uiLine{panel: "chat", panelX0: 0, panelX1: width}
+	}
+	userRow := func(txt string, msgIdx int, body bool) uiLine {
+		ln := uiLine{
+			text:     spaces(2) + paint(colPanel, bar+pad("  "+txt, blockW-1)),
+			panel:    "chat",
+			panelX0:  0,
+			panelX1:  width,
+			hasMsg:   true,
+			msgIndex: msgIdx,
+			msgBody:  body,
+		}
+		if body && lipgloss.Width(txt) > 0 {
+			ln.selectable = true
+			ln.selStart = 5
+			ln.selEnd = 5 + lipgloss.Width(txt)
+		}
+		return ln
 	}
 	_, p := m.cfg.Active()
 	model := valueOr(p.Model, "sin modelo")
 
-	lines := []uiLine{blankLine(width)}
-	for _, msg := range m.msgs {
+	lines := []uiLine{blankChat()}
+	for i, msg := range m.msgs {
 		if msg.Role == "assistant" {
 			for _, ln := range wrapText(sanitizeText(msg.Text), botW) {
-				lines = append(lines, uiLine{text: spaces(5) + textStyle.Render(ln)})
+				row := uiLine{
+					text:     spaces(5) + textStyle.Render(ln),
+					panel:    "chat",
+					panelX0:  0,
+					panelX1:  width,
+					hasMsg:   true,
+					msgIndex: i,
+					msgBody:  true,
+				}
+				if lipgloss.Width(ln) > 0 {
+					row.selectable = true
+					row.selStart = 5
+					row.selEnd = 5 + lipgloss.Width(ln)
+				}
+				lines = append(lines, row)
 			}
-			lines = append(lines, blankLine(width))
-			lines = append(lines, uiLine{text: spaces(5) + agent.Render("▣") + "  " + mutedStyle.Render("nosecode · "+fit(model, 30))})
-			lines = append(lines, blankLine(width))
+			lines = append(lines, blankChat())
+			head := "▣  nosecode · " + fit(model, 30)
+			headLine := uiLine{
+				text:       spaces(5) + agent.Render("▣") + "  " + mutedStyle.Render("nosecode · "+fit(model, 30)),
+				panel:      "chat",
+				panelX0:    0,
+				panelX1:    width,
+				selectable: true,
+				selStart:   5,
+				selEnd:     5 + lipgloss.Width(head),
+				hasMsg:     true,
+				msgIndex:   i,
+				msgHead:    true,
+			}
+			lines = append(lines, headLine)
+			lines = append(lines, blankChat())
 			continue
 		}
-		lines = append(lines, userRow(""))
+		lines = append(lines, userRow("", i, false))
 		for _, ln := range wrapText(sanitizeText(msg.Text), userW) {
-			lines = append(lines, userRow(textStyle.Render(ln)))
+			lines = append(lines, userRow(textStyle.Render(ln), i, true))
 		}
-		lines = append(lines, userRow(""))
-		lines = append(lines, blankLine(width))
+		lines = append(lines, userRow("", i, false))
+		lines = append(lines, blankChat())
 	}
 	return lines
 }
@@ -642,18 +767,43 @@ func (m Model) statusLine() uiLine {
 		right = strings.Join(parts, "  ")
 	}
 
+	avail := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 6
 	mid := ""
-	if m.toast != "" {
+	if text := m.activityText(); text != "" {
+		mid = primaryStyle.Render(fit(text, clamp(avail, 8, 46)))
+	} else if m.toast != "" {
 		style := successStyle
 		if m.toastErr {
 			style = dangerStyle
 		}
-		avail := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 6
 		mid = style.Render(fit(m.toast, clamp(avail, 8, 46)))
 	}
 
 	content := compose(left, mid, right, m.width-2)
 	return uiLine{text: " " + content + " "}
+}
+
+func (m Model) activityText() string {
+	a := m.activity
+	if a.kind == "" {
+		return ""
+	}
+	secs := int(time.Since(a.started).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	switch a.kind {
+	case "model":
+		return fmt.Sprintf("esperando al modelo… %d s", secs)
+	case "stream":
+		return fmt.Sprintf("recibiendo respuesta… %d s", secs)
+	case "tool":
+		return fmt.Sprintf("ejecutando %s… %d s", a.label, secs)
+	case "image":
+		return fmt.Sprintf("procesando imagen… %d s", secs)
+	default:
+		return a.label
+	}
 }
 
 // -------------------------------------------------------------- utils ---

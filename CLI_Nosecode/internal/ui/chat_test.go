@@ -44,10 +44,30 @@ func connected(t *testing.T, url, key string) Model {
 	return m
 }
 
+// unwrapCmd expande un tea.Batch y devuelve su primer comando. Los tests no
+// necesitan el tick de actividad, solo el comando que trae el stream.
+func unwrapCmd(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		if len(batch) == 0 {
+			return nil
+		}
+		return batch[0]
+	}
+	return func() tea.Msg { return msg }
+}
+
 // pump ejecuta los comandos de Bubble Tea como lo haria el runtime hasta que no queden.
 func pump(t *testing.T, m Model, cmd tea.Cmd) Model {
 	t.Helper()
 	for i := 0; cmd != nil && i < 500; i++ {
+		cmd = unwrapCmd(cmd)
+		if cmd == nil {
+			break
+		}
 		nm, next := m.Update(cmd())
 		m = nm.(Model)
 		cmd = next
@@ -106,7 +126,7 @@ func TestChatEscCancela(t *testing.T) {
 	m = nm.(Model)
 
 	// recibe el primer trozo
-	nm, cmd = m.Update(cmd())
+	nm, cmd = m.Update(unwrapCmd(cmd)())
 	m = nm.(Model)
 	if m.msgs[1].Text != "a" {
 		t.Fatalf("primer trozo = %q", m.msgs[1].Text)
@@ -125,7 +145,7 @@ func TestChatEscCancela(t *testing.T) {
 		t.Fatalf("busy=%v toast=%q", m.run.busy(), m.toast)
 	}
 	// el comando pendiente devuelve un mensaje viejo: se ignora sin romper nada
-	nm, next := m.Update(cmd())
+	nm, next := m.Update(unwrapCmd(cmd)())
 	m = nm.(Model)
 	if next != nil || m.msgs[1].Text != "a" {
 		t.Fatalf("mensaje viejo no ignorado: next=%v text=%q", next != nil, m.msgs[1].Text)

@@ -12,6 +12,22 @@ type relHit struct {
 type uiLine struct {
 	text string
 	hits []relHit
+
+	// Metadatos para seleccion con raton. panel limita la seleccion a una zona
+	// (chat, rail...). selectable indica que hay texto copiable entre selStart
+	// y selEnd (columnas de pantalla).
+	panel      string
+	panelX0    int
+	panelX1    int
+	selectable bool
+	selStart   int
+	selEnd     int
+
+	// Mensaje al que pertenece la linea (para doble/triple clic).
+	hasMsg   bool
+	msgIndex int
+	msgBody  bool
+	msgHead  bool
 }
 
 type hitBox struct {

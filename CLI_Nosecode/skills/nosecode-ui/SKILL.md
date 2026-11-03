@@ -1,6 +1,6 @@
 ---
 name: nosecode-ui
-description: Diseño y estilo de la TUI Nosecode (réplica del layout de opencode con tema Vercel, mouse, sonidos). Úsala al tocar la interfaz del proyecto Nosecode.
+description: Diseño y estilo de la TUI Nosecode (réplica del layout de opencode con tema Vercel, mouse, sonidos). Úsala al tocar la interfaz de Nosecode.
 ---
 
 # Nosecode UI
@@ -33,8 +33,10 @@ No inventar colores fuera de `internal/ui/theme.go`.
 
 ## Layout (calcado de opencode)
 
-Sin barra de pestañas: opencode no la tiene. Las sesiones viven en la barra
-lateral y en la paleta (`/sessions`).
+Las sesiones aparecen como pestañas de navegador sobre la cabecera, además de
+la barra lateral y la paleta (`/sessions`). Ancho fijo de pestaña 18: título
+recortado, `×` solo en la activa y chip `+` para crear. Si no caben, se
+recortan con `…` alrededor de la activa. Los hitboxes se recalculan por frame.
 
 - **Home** (sin mensajes): logo en bloques 3 líneas (`█▀▄`, NOSE atenuado y
   CODE en blanco), prompt centrado (ancho 72 máx.), pista
@@ -96,10 +98,18 @@ lateral y en la paleta (`/sessions`).
   espacios. Filtra por prefijo, se mueve con ↑/↓, completa con `tab`, ejecuta con
   `enter` y se oculta con `esc`. Se dibuja inmediatamente encima del prompt y no
   debe empujar el chat fuera de la pantalla.
-- `selection.go`: arrastrar con el botón izquierdo selecciona por coordenadas;
-  al soltar copia el texto plano al portapapeles. `ctrl+y` y `ctrl+c` copian la
-  selección o la última respuesta. `esc` limpia la selección. El resaltado se
-  aplica después de `normalizeScreen` y antes de registrar hitboxes.
+- `selection.go`: arrastrar con el botón izquierdo selecciona por caracteres
+  (columnas reales), no por filas. La selección queda limitada al panel donde
+  empezó (`chat`), nunca invade la barra lateral ni los márgenes. Al copiar se
+  recorta al texto de cada línea: sin relleno final, sin barras `┃│` y sin
+  bordes; las líneas se unen con `\n`. Doble clic selecciona una palabra; triple
+  clic selecciona solo el cuerpo del mensaje, sin la cabecera `nosecode · modelo`.
+  `esc` limpia la selección. El resaltado se aplica después de `normalizeScreen`
+  y antes de registrar hitboxes.
+- `/copy` copia la última respuesta completa y guarda sus bloques ``` en
+  `~/.nosecode/copies`; `/copy code [n]` copia uno y `/copy files` los guarda.
+  `ctrl+y` copia la última respuesta; `ctrl+c` copia la selección. Ambos usan
+  `atotto/clipboard` (dependencia indirecta, no tocar `go.mod`).
 - `agent.go`: el modal `screenTool` pide permiso por herramienta MCP. Acciones:
   `toolAllow`, `toolAllowSession`, `toolDeny`. Mientras conecta muestra
   `⏳ Conectando herramientas MCP…`; no permitir envíos duplicados.

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"time"
@@ -41,12 +42,45 @@ type agentRun struct {
 	pending      []api.ToolCall
 	pendingIdx   int
 	rounds       int
+	steps        int
 	allowSession bool
 	connecting   bool
+	ctx          context.Context
+	cancel       context.CancelFunc
+	failures     toolFailureGuard
 }
 
 func (a *agentRun) busy() bool {
 	return a != nil && (a.stream != nil || a.connecting || len(a.pending) > 0 || len(a.calls) > 0)
+}
+
+// activityState describe la espera visible en la barra de estado.
+type activityState struct {
+	kind    string
+	label   string
+	started time.Time
+	seq     int
+}
+
+type activityMsg struct{ seq int }
+
+func activityTick(seq int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return activityMsg{seq: seq} })
+}
+
+func (m Model) startActivity(kind, label string) (Model, tea.Cmd) {
+	m.activity = activityState{
+		kind:    kind,
+		label:   label,
+		started: time.Now(),
+		seq:     m.activity.seq + 1,
+	}
+	return m, activityTick(m.activity.seq)
+}
+
+func (m Model) stopActivity() Model {
+	m.activity = activityState{seq: m.activity.seq + 1}
+	return m
 }
 
 // renameState edita el titulo de una sesion.
@@ -103,6 +137,12 @@ type Model struct {
 	sel        selectState
 	buf        *screenBuffer
 	slashMenu  slashState
+	activity   activityState
+
+	clickAt    time.Time
+	clickX     int
+	clickY     int
+	clickCount int
 }
 
 // New construye la aplicacion con la configuracion ya cargada.
@@ -177,6 +217,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onMCPReady(msg)
 	case toolDoneMsg:
 		return m.onToolDone(msg)
+	case activityMsg:
+		if msg.seq == m.activity.seq && m.activity.kind != "" {
+			return m, activityTick(msg.seq)
+		}
+		return m, nil
 	case vaultMsg:
 		return m.onVault(msg)
 	}
@@ -310,7 +355,7 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+y":
-		return m.copySelection(), nil
+		return m.copyLast(), nil
 	case "pgup":
 		m.scroll += 5
 		return m, nil
@@ -335,9 +380,11 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if msg.Action == tea.MouseActionMotion {
 		if m.sel.dragging {
-			if msg.X != m.sel.endX || msg.Y != m.sel.endY {
-				m.sel.endX, m.sel.endY = msg.X, msg.Y
-				m.sel.moved = m.sel.moved || msg.X != m.sel.startX || msg.Y != m.sel.startY
+			y := clamp(msg.Y, m.sel.panelTop, m.sel.panelBottom)
+			x := clamp(msg.X, m.sel.panelX0, m.sel.panelX1-1)
+			if x != m.sel.endX || y != m.sel.endY {
+				m.sel.endX, m.sel.endY = x, y
+				m.sel.moved = m.sel.moved || x != m.sel.startX || y != m.sel.startY
 			}
 			return m, nil
 		}
@@ -364,26 +411,72 @@ func (m Model) mouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 		if hb, ok := m.hit.At(msg.X, msg.Y); ok {
 			m.sel = selectState{}
+			m.clickCount = 0
 			return m.activate(hb.action, hb.arg)
 		}
 		if m.screen != screenChat {
 			if m.screen != screenTool && m.screen != screenConfirm {
 				m.screen = screenChat
 			}
+			m.sel = selectState{}
 			return m, nil
 		}
+		if m.buf == nil || msg.Y < 0 || msg.Y >= len(m.buf.lines) {
+			return m, nil
+		}
+		ln := m.buf.lines[msg.Y]
+		if ln.panel != "chat" {
+			m.sel = selectState{}
+			return m, nil
+		}
+
+		now := time.Now()
+		count := 1
+		dx := msg.X - m.clickX
+		if dx < 0 {
+			dx = -dx
+		}
+		if !m.clickAt.IsZero() && now.Sub(m.clickAt) < 450*time.Millisecond &&
+			dx <= 2 && msg.Y == m.clickY {
+			count = m.clickCount + 1
+		}
+		if count > 3 {
+			count = 1
+		}
+		m.clickAt, m.clickX, m.clickY, m.clickCount = now, msg.X, msg.Y, count
+
+		if count == 3 {
+			m.sel = selectState{}
+			return m.selectMessageAt(msg.X, msg.Y), nil
+		}
+		if count == 2 {
+			m.sel = selectState{}
+			return m.selectWordAt(msg.X, msg.Y), nil
+		}
+
+		top, bottom, ok := m.panelBounds(msg.Y)
+		if !ok {
+			return m, nil
+		}
+		x := clamp(msg.X, ln.panelX0, ln.panelX1-1)
 		m.sel = selectState{
-			dragging: true,
-			startX:   msg.X,
-			startY:   msg.Y,
-			endX:     msg.X,
-			endY:     msg.Y,
+			dragging:    true,
+			startX:      x,
+			startY:      msg.Y,
+			endX:        x,
+			endY:        msg.Y,
+			panel:       ln.panel,
+			panelTop:    top,
+			panelBottom: bottom,
+			panelX0:     ln.panelX0,
+			panelX1:     ln.panelX1,
 		}
 		return m, nil
 	}
 
 	if msg.Action == tea.MouseActionRelease && m.sel.dragging {
-		m.sel.endX, m.sel.endY = msg.X, msg.Y
+		m.sel.endY = clamp(msg.Y, m.sel.panelTop, m.sel.panelBottom)
+		m.sel.endX = clamp(msg.X, m.sel.panelX0, m.sel.panelX1-1)
 		m.sel.dragging = false
 		if m.sel.moved {
 			m.sel.active = true
@@ -641,7 +734,7 @@ func (m Model) slash(text string) Model {
 	case "/vault":
 		m = m.importVault()
 	case "/copy", "/copiar":
-		return m.copyLast()
+		return m.copyCommand(rest)
 	case "/mcp", "/tools":
 		return m.mcpSlash(rest)
 	case "/agent":
@@ -1114,7 +1207,9 @@ var helpText = strings.Join([]string{
 	"  /down       apagar la IA y dejar de gastar GPU (F8)",
 	"  /urls       ver qué túneles están vivos",
 	"  /status     estado del notebook en Kaggle",
-	"  /copy       copiar la última respuesta",
+	"  /copy          copiar la última respuesta completa",
+	"  /copy code [n] copiar un bloque de código",
+	"  /copy files    guardar los bloques en ~/.nosecode/copies",
 	"  /mcp        servidores MCP: import, tools, on/off",
 	"  /agent      activar o desactivar herramientas MCP",
 	"  /config     ruta del config",
@@ -1128,8 +1223,10 @@ var helpText = strings.Join([]string{
 	"  ctrl+w  eliminar sesión    ctrl+b  barra lateral",
 	"  enter   enviar      alt+enter  nueva línea",
 	"  pgup/pgdn o rueda   desplazar",
-	"  arrastra el ratón   seleccionar y copiar",
-	"  ctrl+y o ctrl+c  copiar selección o última respuesta",
+	"  arrastra el ratón   seleccionar por caracteres y copiar",
+	"  doble clic   palabra    triple clic   cuerpo del mensaje",
+	"  ctrl+y  copiar la última respuesta",
+	"  ctrl+c  copiar la selección",
 	"  f8  apagar la IA    ctrl+q  salir",
 }, "\n")
 

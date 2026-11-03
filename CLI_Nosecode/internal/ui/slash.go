@@ -24,7 +24,7 @@ var slashEntries = []slashEntry{
 	{"/settings", "abrir ajustes", false},
 	{"/model", "ver o cambiar el modelo", true},
 	{"/sessions", "cambiar de sesión", false},
-	{"/copy", "copiar la última respuesta", false},
+	{"/copy", "última respuesta · code [n] · files", true},
 	{"/mcp", "servidores MCP: import, tools, on/off", true},
 	{"/agent", "activar o desactivar herramientas", false},
 	{"/vault", "importar endpoint del Vault", false},
