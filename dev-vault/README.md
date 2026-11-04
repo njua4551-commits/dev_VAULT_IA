@@ -46,6 +46,19 @@ python client/vault.py chat                               # o: web / key / urls 
 python client/vault.py down                               # apaga y deja de gastar GPU
 ```
 
+### Instalador automatico
+
+```
+python scripts/setup.py            # instala kaggle, pide credenciales y configura todo
+python scripts/setup.py --local    # solo reconfigura ~/.dev-vault (ya instalado)
+python scripts/setup.py --save-bin # sube el llama-server compilado tras la 1a sesion
+python scripts/setup.py --check    # muestra el estado sin cambiar nada
+```
+
+Pide solo usuario/API key de Kaggle (o reutiliza `kaggle auth login`), token y
+dominio de ngrok y, opcionalmente, la clave de Tailscale. Si el Dataset del
+binario ya existe, lo adjunta para no recompilar.
+
 ## Estado y limitaciones
 
 - Validado **offline** (cliente contra un Kaggle falso, notebook por funciones, cmake contra llama.cpp actual). **No ejecutado en Kaggle real**: la primera corrida es la prueba.
