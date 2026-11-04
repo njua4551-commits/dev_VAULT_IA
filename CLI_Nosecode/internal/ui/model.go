@@ -147,7 +147,15 @@ type Model struct {
 }
 
 // New construye la aplicacion con la configuracion ya cargada.
-func New(cfg *config.Config) Model { return newModel(cfg, true) }
+func New(cfg *config.Config) Model {
+	m := newModel(cfg, true)
+	if changed, url := cfg.SyncVault(); changed {
+		_ = cfg.Save()
+		m.toast = "Proveedor actualizado: " + strings.TrimSuffix(url, "/v1")
+		m.toastErr = false
+	}
+	return m
+}
 
 func newModel(cfg *config.Config, withSessions bool) Model {
 	applyPalette(PaletteByName(cfg.UI.Theme))
@@ -639,6 +647,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 	m.toast = ""
 
+	m = m.syncVault()
 	if m.providerReady() {
 		m = m.saveActive()
 		if m.useAgent() {

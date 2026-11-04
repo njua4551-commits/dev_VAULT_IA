@@ -313,6 +313,40 @@ func ImportVault() (Provider, bool) {
 	return p, true
 }
 
+// SyncVault relee ~/.dev-vault/state.json y actualiza SOLO el proveedor vault.
+// Devuelve true y la URL nueva si hubo cambios.
+func (c *Config) SyncVault() (bool, string) {
+	p, ok := ImportVault()
+	if !ok || strings.TrimSpace(p.BaseURL) == "" {
+		return false, ""
+	}
+	cur, exists := c.Providers["vault"]
+	if !exists {
+		return false, ""
+	}
+
+	base := NormalizeBaseURL(p.BaseURL)
+	changed := NormalizeBaseURL(cur.BaseURL) != base
+	cur.BaseURL = base
+	if p.APIKey != "" && p.APIKey != cur.APIKey {
+		cur.APIKey = p.APIKey
+		changed = true
+	}
+	if p.Model != "" && p.Model != cur.Model {
+		cur.Model = p.Model
+		changed = true
+	}
+	if cur.Type == "" {
+		cur.Type = "openai"
+		changed = true
+	}
+	if !changed {
+		return false, ""
+	}
+	c.Providers["vault"] = cur
+	return true, base
+}
+
 // OpenCodeConfig devuelve la ruta del opencode.json global.
 func OpenCodeConfig() string {
 	dir, err := os.UserHomeDir()

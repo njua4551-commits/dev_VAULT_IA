@@ -124,6 +124,20 @@ func TestStreamCambiaDeTunelSiHay5xxOCaida(t *testing.T) {
 	}
 }
 
+func TestStreamCambiaDeTunelSi404(t *testing.T) {
+	offline := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte("The endpoint x is offline. ERR_NGROK_3200"))
+	}))
+	good := sseServer(t, "k", []string{"ok"}, 0)
+	defer offline.Close()
+	defer good.Close()
+	text, last := collect(Stream(context.Background(), req(offline.URL+"/v1", good.URL+"/v1")))
+	if last.Err != nil || text != "ok" || last.Base != good.URL+"/v1" {
+		t.Fatalf("text=%q last=%+v", text, last)
+	}
+}
+
 func TestStreamTodosFallan(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502) }))
 	defer down.Close()

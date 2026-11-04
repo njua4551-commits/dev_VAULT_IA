@@ -301,13 +301,14 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 		return m.finishAgent(), nil
 	}
 
+	m = m.adoptBase(c.Base)
+
 	if len(calls) == 0 {
 		if strings.TrimSpace(assistantText) == "" {
 			m.msgs[i].Text = "(respuesta vacía)"
 		}
 		return m.finishAgent(), nil
 	}
-
 	if strings.TrimSpace(assistantText) == "" {
 		m.msgs[i].Text = "⚙ " + toolNames(calls)
 	}

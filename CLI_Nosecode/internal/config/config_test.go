@@ -142,3 +142,32 @@ func TestThemeMigration(t *testing.T) {
 		t.Fatalf("version = %d, queria %d", cfg.Version, CurrentVersion)
 	}
 }
+
+func TestSyncVaultActualizaSoloVault(t *testing.T) {
+	vault := t.TempDir()
+	if err := os.WriteFile(filepath.Join(vault, "config.json"), []byte(`{"api_key":"k1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vault, "state.json"), []byte(`{"url":"https://nuevo.ngrok-free.dev","model":"Qwen3.8-27B"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VAULT_HOME", vault)
+
+	c := Defaults()
+	c.Providers["vault"] = Provider{Type: "openai", BaseURL: "https://viejo.ngrok-free.dev/v1", APIKey: "k1", Model: "viejo"}
+	c.Providers["otro"] = Provider{BaseURL: "https://otro/v1"}
+
+	changed, url := c.SyncVault()
+	if !changed || url != "https://nuevo.ngrok-free.dev/v1" {
+		t.Fatalf("changed=%v url=%q", changed, url)
+	}
+	if got := c.Providers["vault"]; got.BaseURL != url || got.Model != "Qwen3.8-27B" {
+		t.Fatalf("vault = %+v", got)
+	}
+	if got := c.Providers["otro"].BaseURL; got != "https://otro/v1" {
+		t.Fatalf("otro proveedor cambio: %q", got)
+	}
+	if changed, _ := c.SyncVault(); changed {
+		t.Fatal("la segunda llamada no debia cambiar nada")
+	}
+}

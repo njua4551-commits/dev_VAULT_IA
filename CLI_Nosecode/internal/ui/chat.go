@@ -88,6 +88,36 @@ func (m Model) providerReady() bool {
 	return strings.TrimSpace(p.BaseURL) != "" && strings.TrimSpace(p.APIKey) != ""
 }
 
+// syncVault relee el Vault antes de cada turno y avisa si cambio la URL.
+func (m Model) syncVault() Model {
+	changed, url := m.cfg.SyncVault()
+	if !changed {
+		return m
+	}
+	m = m.saveCfg()
+	if !m.toastErr {
+		m.toast = "Proveedor actualizado: " + strings.TrimSuffix(url, "/v1")
+	}
+	return m
+}
+
+// adoptBase guarda la URL que respondio cuando el tunel cambio solo.
+func (m Model) adoptBase(base string) Model {
+	name, p := m.cfg.Active()
+	base = config.NormalizeBaseURL(base)
+	if name != "vault" || base == "" || base == config.NormalizeBaseURL(p.BaseURL) {
+		return m
+	}
+	p.BaseURL = base
+	m.cfg.Providers["vault"] = p
+	if err := m.cfg.Save(); err != nil {
+		m.toast, m.toastErr = "Error guardando: "+err.Error(), true
+		return m
+	}
+	m.toast, m.toastErr = "Proveedor actualizado: "+strings.TrimSuffix(base, "/v1"), false
+	return m
+}
+
 // startChat envia la conversacion (el mensaje del usuario ya esta en m.msgs).
 func (m Model) startChat() (Model, tea.Cmd) {
 	_, p := m.cfg.Active()
@@ -135,6 +165,7 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case c.Err == nil:
 		m.toast, m.toastErr = "", false
+		m = m.adoptBase(c.Base)
 		if strings.TrimSpace(m.msgs[i].Text) == "" {
 			m.msgs[i].Text = "(respuesta vacía)"
 		}

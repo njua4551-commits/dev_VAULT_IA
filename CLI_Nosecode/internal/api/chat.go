@@ -104,6 +104,11 @@ func (e *HTTPError) retryable() bool {
 	switch e.Code {
 	case 402, 403, 429:
 		return true
+	case 404:
+		// ngrok devuelve 404 con ERR_NGROK_3200 cuando el endpoint esta offline;
+		// tambien puede ser una URL vieja. Probar el siguiente tunel es seguro
+		// mientras no haya llegado texto.
+		return true
 	}
 	return e.Code >= 500
 }
