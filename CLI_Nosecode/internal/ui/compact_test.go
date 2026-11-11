@@ -93,6 +93,17 @@ func TestCompactResumeConModelo(t *testing.T) {
 	}
 }
 
+func TestFinishAgentConservaAvisoContexto(t *testing.T) {
+	m := newTestModel(t)
+	m.ctxWarned = true
+	m.toast = "Contexto al 85% · usa /compact para resumir"
+	m.run.agent = &agentRun{}
+	m = m.finishAgent()
+	if !strings.Contains(m.toast, "/compact") {
+		t.Fatalf("toast = %q", m.toast)
+	}
+}
+
 func TestWarnContextUnaVez(t *testing.T) {
 	m := newTestModel(t)
 	m.contextWin = 100000

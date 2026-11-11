@@ -58,7 +58,7 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 ## Segunda entrega (tareas 5–7)
 
 - Imágenes de herramientas: se decodifican (PNG/JPEG/GIF), se reducen a un máximo
-  de 1280 px, se aplanan sobre blanco y se convierten a JPEG calidad 82.
+  de 1024 px, se aplanan sobre blanco y se convierten a JPEG calidad 82.
 - La captura se guarda en `~/.nosecode/tool-images` y se envía al modelo como
   `image_url` con data URI, en un mensaje de usuario posterior al resultado de la
   herramienta.
@@ -73,6 +73,59 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 - Pruebas añadidas: reducción/JPEG de imágenes, poda a dos imágenes, serialización
   `image_url` y escritura de `debug.log`. `gofmt`, `go build`, `go vet` y
   `go test ./...` pasan.
+
+## Actualización 2026-11-10 — herramientas nativas, contexto y robustez
+
+### Bloque A — herramientas
+
+- Paquete `internal/tools`: `bash` (PowerShell o bash/sh, timeout 60 s, salida 8 KB),
+  `read_file` con rango, `write_file`, `edit_file` único, `list_dir`, `grep`,
+  `screenshot` (Wayland con `grim -`; X11 con `scrot`/`import`; Windows con PowerShell),
+  `view_image`, `web_fetch` (HTML a texto, 20 KB) y `remember`.
+- `screenshot`/`view_image` devuelven la imagen y el cliente la reduce a 1024 px
+  antes de enviarla al modelo; las capturas se guardan en `~/.nosecode/tool-images`.
+- Confirmación antes de `bash`, `write_file`, `edit_file` y herramientas de
+  navegador/MCP, con «permitir en esta sesión».
+- Las herramientas MCP ya no se envían por defecto. `browser_navigate`,
+  `browser_click` y `browser_type` solo con `/tools browser on`; el resto de MCP
+  solo con `/tools mcp on`. Las nativas están siempre activas.
+- `/tools` lista las activas con tokens aproximados; `debug.log` registra al
+  arrancar el número de herramientas y su tamaño.
+
+### Bloque B — contexto y memoria
+
+- `NOSECODE.md` (o `NOSECODE_MEMORY`) se carga en el mensaje de sistema y
+  `remember` añade notas ahí.
+- Microcompact: solo las últimas `tools.compact_keep` salidas de herramientas
+  (6 por defecto) quedan completas; el resto pasa a `[salida borrada]`.
+- `/compact` resume la conversación con el propio modelo, conserva el principio y
+  el final, y continúa desde ese resumen.
+- La ventana de contexto se lee de `/props` (`n_ctx`); si no está, se usa
+  `context_window` del proveedor o 131072.
+- La barra muestra tokens y porcentaje; `usage`/`timings` reales del servidor si
+  existen. Al 80 % avisa con `/compact`.
+- Un 400 con «exceeds the available context size» se muestra como contexto lleno
+  con sugerencia de `/compact`, sin dejar el turno colgado.
+
+### Bloque C — robustez
+
+- MCP se conecta una sola vez al arrancar, en segundo plano y con timeout de 70 s.
+  `debug.log` registra `connecting`, `error`, `timeout` y `ready`; la barra muestra
+  «MCP conectando…» o el motivo del error.
+- `safe-edit.sh` / `safe-edit.ps1`: checkpoint en git, binario nuevo en
+  `dist/nosecode-FECHA` (sin tocar el que corre), `go build` + `go test` y
+  reversión al hash base si falla, borrando también los archivos nuevos de
+  `internal/` y `cmd/`.
+- `TestIsChromium` normaliza separadores con `filepath` y acepta nombres Linux.
+- `go build ./...`, `go vet ./...`, `go test ./...` y cross-compilación
+  `GOOS=linux`/`GOOS=windows` pasan.
+
+### Pendiente de esta actualización
+
+- Probar `/compact`, el contador real y la captura de pantalla en la TUI con la
+  IA encendida.
+- Reinstalar el binario en Windows y Linux para usar esta versión.
+- Decidir si se suben los commits `3605b6b`, `21b33e0` y el del Bloque C a `origin/main`.
 
 ## Pendiente
 

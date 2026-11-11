@@ -39,8 +39,12 @@ peticiones de red.
 - Importación del endpoint del Dev Vault (`~/.dev-vault`).
 - Chat con streaming SSE y comandos `/up`, `/down`, `/urls` y `/status`.
 
-El agente MCP (modo Build), la aprobación por herramienta y el apagado visible
-del Vault ya están integrados. Pendiente: adjuntos multimedia (Fase 5).
+El agente usa herramientas nativas en Go (bash, leer/escribir/editar archivos,
+listar, grep, captura de pantalla, ver imágenes, descargar webs y memoria). Las
+herramientas de navegador (`browser_navigate`, `browser_click`, `browser_type`)
+solo se envían con `/tools browser on`; el resto de MCP, con `/tools mcp on`.
+El contexto se controla con microcompact, `/compact` y un aviso al 80 % de la
+ventana; `NOSECODE.md` se carga como memoria al iniciar cada sesión.
 
 ## Instalar
 
@@ -129,7 +133,8 @@ cambiar. En la paleta, escribe para filtrar y `enter` para ejecutar.
 ### Comandos
 
 `/settings`, `/model [nombre]`, `/sessions`, `/copy [code [n]|files]`,
-`/tokens`, `/sound`, `/theme`, `/mcp`, `/agent`, `/vault`, `/up`, `/down`,
+`/tokens`, `/sound`, `/theme`, `/tools [browser|mcp on|off]`, `/compact`,
+`/mcp`, `/agent`, `/vault`, `/up`, `/down`,
 `/urls`, `/status`, `/config`, `/new`, `/help`, `/quit`.
 
 `/copy` copia la última respuesta completa y guarda sus bloques de código en
@@ -180,10 +185,11 @@ Se crea sola en `~/.nosecode/config.json` (o
       "base_url": "https://tu-tunel.ngrok.app/v1",
       "api_key": "tu-key",
       "model": "Qwen3.8-27B",
-      "context_window": 32768
+      "context_window": 131072
     }
   },
   "permissions": { "bash": "ask", "edit": "ask", "webfetch": "ask" },
+  "tools": { "browser": false, "mcp": false, "compact_keep": 6 },
   "ui": {
     "theme": "vercel",
     "sidebar": true,
@@ -194,10 +200,30 @@ Se crea sola en `~/.nosecode/config.json` (o
 }
 ```
 
+- `context_window` es el valor de reserva (131072 por defecto). Si el servidor
+  expone `/props` con `n_ctx`, Nosecode usa ese valor al arrancar.
+- `tools.browser` y `tools.mcp` también se cambian con `/tools browser on|off`
+  y `/tools mcp on|off`; `compact_keep` es cuántas salidas de herramientas se
+  conservan completas (el resto pasa a `[salida borrada]`).
 - `VAULT_HOME` cambia la carpeta del Dev Vault.
 - En **Ajustes → Importar del Vault** se copia el endpoint detectado.
 - `mute: false` deja los sonidos activados.
 - Temas: `vercel` (predeterminado) y `midnight`.
+
+## Autoedición segura
+
+Si vas a modificar el propio cliente, usa los scripts incluidos:
+
+```sh
+./safe-edit.sh checkpoint           # commit del estado actual; imprime el hash base
+# ...editar código...
+./safe-edit.sh verify <hash-base>   # binario nuevo + go build + go test, revierte si falla
+```
+
+En Windows: `.\safe-edit.ps1 checkpoint` y `.\safe-edit.ps1 verify <hash-base>`.
+El binario nuevo se escribe en `dist/nosecode-FECHA` (`.exe` en Windows), nunca
+sobre el que está ejecutándose. Si fallan el build o los tests, el árbol vuelve
+al hash base y se borran los archivos nuevos de `internal/` y `cmd/`.
 
 El archivo se guarda con permisos `0600` porque contiene tu API key. No lo
 subas a un repositorio.

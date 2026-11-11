@@ -461,10 +461,17 @@ func (m Model) railLines(height int) []uiLine {
 
 	if m.cfg.UI.Tokens {
 		add(titleStyle.Render("Contexto"))
-		add(mutedStyle.Render(fmt.Sprintf("%d tokens", m.tokensValue())))
-		if p.ContextWindow > 0 {
-			add(mutedStyle.Render(fmt.Sprintf("%d%% usado", m.tokensValue()*100/p.ContextWindow)))
+		prefix := "~"
+		if m.usageValid {
+			prefix = ""
 		}
+		add(mutedStyle.Render(fmt.Sprintf("%s%d tokens", prefix, m.contextUsed())))
+		pct := m.contextPercent()
+		label := fmt.Sprintf("%d%% usado", pct)
+		if pct >= 80 {
+			label += " · /compact"
+		}
+		add(mutedStyle.Render(label))
 		add("")
 	}
 

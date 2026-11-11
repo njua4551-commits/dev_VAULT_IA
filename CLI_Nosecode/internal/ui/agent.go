@@ -94,7 +94,9 @@ const agentSystem = "Eres Nosecode, un agente de terminal con herramientas nativ
 	"2. Para rutas usa el formato del sistema; no inventes contenido de archivos ni resultados.\n" +
 	"3. Antes de editar, lee el archivo y usa edit_file con el texto exacto y único.\n" +
 	"4. No ejecutes comandos destructivos sin explicar qué harás y por qué.\n" +
-	"5. Responde en español, breve y claro. No inventes resultados."
+	"5. Si modificas el propio Nosecode, haz checkpoint con safe-edit.sh (o safe-edit.ps1), " +
+	"compila a un binario nuevo en dist y revierte si fallan go build o go test.\n" +
+	"6. Responde en español, breve y claro. No inventes resultados."
 
 type mcpReadyMsg struct {
 	manager *mcp.Manager
@@ -115,7 +117,12 @@ func (m Model) useAgent() bool {
 
 func (m Model) startAgent() (Model, tea.Cmd) {
 	m.run.agent = &agentRun{}
-	return m.beginAgent()
+	nm, cmd := m.beginAgent()
+	if nm.mcpLoading && !nm.mcpInFlight && nm.mcp == nil && len(nm.cfg.MCP.Servers) > 0 {
+		nm.mcpInFlight = true
+		return nm, tea.Batch(cmd, connectMCPCmd(nm.cfg.MCP.Servers))
+	}
+	return nm, cmd
 }
 
 func connectMCPCmd(servers map[string]config.MCPServer) tea.Cmd {
@@ -137,7 +144,21 @@ func connectMCPCmd(servers map[string]config.MCPServer) tea.Cmd {
 
 func (m Model) onMCPReady(msg mcpReadyMsg) (tea.Model, tea.Cmd) {
 	m.mcpLoading = false
+	m.mcpInFlight = false
 	m = m.clearConnecting()
+	if !m.cfg.MCP.Enabled && !m.cfg.Tools.MCP && !m.cfg.Tools.Browser {
+		if msg.manager != nil {
+			msg.manager.Close()
+		}
+		if m.mcp != nil {
+			m.mcp.Close()
+			m.mcp = nil
+		}
+		m.mcpTools = nil
+		m.mcpErrs = nil
+		debuglog.Logf("mcp ignored: disabled")
+		return m, nil
+	}
 	if m.mcp != nil && m.mcp != msg.manager {
 		m.mcp.Close()
 	}
@@ -201,7 +222,11 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
 	var tick tea.Cmd
 	m, tick = m.startActivity("model", "")
-	m.toast, m.toastErr = "Agente trabajando… (esc cancela)", false
+	if m.ctxWarned {
+		m.toast, m.toastErr = "Agente trabajando… · contexto alto: usa /compact", false
+	} else {
+		m.toast, m.toastErr = "Agente trabajando… (esc cancela)", false
+	}
 	m.scroll = 0
 	m.layout()
 	return m, tea.Batch(waitChunk(s), tick)
@@ -423,8 +448,8 @@ func approvalCategory(name string) (string, bool) {
 	return "", false
 }
 
-func (m Model) approvalAllowed(category string, a *agentRun) bool {
-	if a != nil && a.sessionAllow[category] {
+func (m Model) approvalAllowed(category string) bool {
+	if m.allowTools[category] {
 		return true
 	}
 	switch category {
@@ -440,7 +465,7 @@ func (m Model) approvalAllowed(category string, a *agentRun) bool {
 func (m Model) callsNeedApproval(calls []api.ToolCall) bool {
 	for _, c := range calls {
 		if cat, ok := approvalCategory(c.Function.Name); ok {
-			if !m.approvalAllowed(cat, m.run.agent) {
+			if !m.approvalAllowed(cat) {
 				return true
 			}
 		}
@@ -756,7 +781,7 @@ func (m Model) finishAgent() Model {
 	m.run.agent = nil
 	m.screen = screenChat
 	m = m.stopActivity()
-	if !m.toastErr {
+	if !m.toastErr && !m.ctxWarned {
 		m.toast = ""
 	}
 	m.sound(soundDone)
@@ -783,12 +808,12 @@ func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.executeNextTool()
 	case "a":
 		m.screen = screenChat
-		if a.sessionAllow == nil {
-			a.sessionAllow = map[string]bool{}
+		if m.allowTools == nil {
+			m.allowTools = map[string]bool{}
 		}
 		for _, call := range m.tool.calls {
 			if cat, ok := approvalCategory(call.Function.Name); ok {
-				a.sessionAllow[cat] = true
+				m.allowTools[cat] = true
 			}
 		}
 		a.pending = m.tool.calls
@@ -955,9 +980,12 @@ func (m Model) mcpSlash(rest string) Model {
 			break
 		}
 		m.closeMCP()
+		if len(m.cfg.MCP.Servers) > 0 {
+			m.mcpLoading = true
+		}
 		m.toast, m.toastErr = fmt.Sprintf("%d servidores MCP importados", n), false
 		m.msgs = append(m.msgs, Message{Role: "assistant",
-			Text: fmt.Sprintf("Importados %d servidores MCP desde %s.\nEscribe /agent on o simplemente un mensaje.", n, path)})
+			Text: fmt.Sprintf("Importados %d servidores MCP desde %s.\nSe conectarán en segundo plano; sus herramientas se envían con /tools mcp on.", n, path)})
 	case "on", "off":
 		m.cfg.MCP.Enabled = arg == "on"
 		m.saveCfg()
@@ -1052,12 +1080,17 @@ func (m Model) toolsSlash(rest string) Model {
 		m.toast, m.toastErr = "Uso: /tools [browser|mcp] on|off", true
 		return m
 	}
+	if on && m.mcp == nil && len(m.cfg.MCP.Servers) == 0 {
+		if args[0] == "browser" {
+			m.cfg.Tools.Browser = false
+		} else {
+			m.cfg.Tools.MCP = false
+		}
+		m.toast, m.toastErr = "No hay servidores MCP configurados; usa /mcp import", true
+		return m
+	}
 	if on && m.mcp == nil {
 		m.cfg.MCP.Enabled = true
-		if len(m.cfg.MCP.Servers) == 0 {
-			m.toast, m.toastErr = "No hay servidores MCP configurados; usa /mcp import", true
-			return m
-		}
 		if !m.mcpLoading {
 			m.mcpLoading = true
 			debuglog.Logf("mcp connect requested by /tools %s on", args[0])
@@ -1089,6 +1122,8 @@ func (m Model) closeMCP() Model {
 	}
 	m.mcpTools = nil
 	m.mcpErrs = nil
+	m.mcpLoading = false
+	m.mcpInFlight = false
 	return m
 }
 
@@ -1096,7 +1131,7 @@ func (m Model) mcpStatus() string {
 	if m.mcpLoading {
 		return "MCP conectando…"
 	}
-	if len(m.mcpErrs) > 0 && m.mcp == nil {
+	if len(m.mcpErrs) > 0 && len(m.mcpTools) == 0 {
 		return "MCP error: " + oneLine(m.mcpErrs[0], 60)
 	}
 	if m.mcp != nil && (m.cfg.Tools.MCP || m.cfg.Tools.Browser) {

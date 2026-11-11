@@ -41,6 +41,12 @@ func TestIsChromium(t *testing.T) {
 		`C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe`: true,
 		`C:\Program Files\Google\Chrome\Application\chrome.exe`:              true,
 		`C:\Program Files\Mozilla Firefox\firefox.exe`:                       false,
+		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`:             true,
+		"/usr/bin/brave":          true,
+		"/usr/bin/google-chrome":  true,
+		"/usr/bin/chromium":       true,
+		"/usr/bin/microsoft-edge": true,
+		"/usr/bin/firefox":        false,
 	}
 	for exe, want := range cases {
 		if got := IsChromium(exe); got != want {

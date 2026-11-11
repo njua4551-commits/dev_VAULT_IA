@@ -149,7 +149,11 @@ func (m Model) startChat() (Model, tea.Cmd) {
 	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
 	var tick tea.Cmd
 	m, tick = m.startActivity("model", "")
-	m.toast, m.toastErr = "Escribiendo… (esc cancela)", false
+	if m.ctxWarned {
+		m.toast, m.toastErr = "Escribiendo… · contexto alto: usa /compact", false
+	} else {
+		m.toast, m.toastErr = "Escribiendo… (esc cancela)", false
+	}
 	return m, tea.Batch(waitChunk(s), tick)
 }
 
@@ -182,7 +186,10 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	m.run.stream = nil
 	switch {
 	case c.Err == nil:
-		m.toast, m.toastErr = "", false
+		m.toastErr = false
+		if !m.ctxWarned {
+			m.toast = ""
+		}
 		m = m.adoptBase(c.Base)
 		if strings.TrimSpace(m.msgs[i].Text) == "" {
 			m.msgs[i].Text = "(respuesta vacía)"

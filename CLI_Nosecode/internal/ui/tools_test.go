@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"nosecode/internal/api"
+	"nosecode/internal/config"
 	"nosecode/internal/mcp"
 )
 
@@ -77,6 +78,66 @@ func TestApiToolsMCPOnSinNavegador(t *testing.T) {
 	}
 	if hasTool(defs, "browser_navigate") || hasTool(defs, "playwright__browser_navigate") {
 		t.Fatalf("navegador debe seguir apagado: %v", defNames(defs))
+	}
+}
+
+func TestToolsSlashListaNativas(t *testing.T) {
+	m := newTestModel(t)
+	m = m.toolsSlash("")
+	if len(m.msgs) == 0 {
+		t.Fatal("sin respuesta de /tools")
+	}
+	last := m.msgs[len(m.msgs)-1].Text
+	if !strings.Contains(last, "bash") || !strings.Contains(last, "tokens") ||
+		!strings.Contains(last, "/tools browser") {
+		t.Fatalf("/tools = %q", last)
+	}
+}
+
+func TestToolsToggleSinServidores(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.MCP.Servers = map[string]config.MCPServer{}
+	m = m.toolsSlash("mcp on")
+	if m.cfg.Tools.MCP || !m.toastErr {
+		t.Fatalf("MCP=%v toastErr=%v toast=%q", m.cfg.Tools.MCP, m.toastErr, m.toast)
+	}
+}
+
+func TestOnMCPReadyIgnoradoSiEstaApagado(t *testing.T) {
+	m := newTestModel(t)
+	m.mcpLoading = true
+	m.mcpInFlight = true
+	updated, _ := m.onMCPReady(mcpReadyMsg{})
+	got, ok := updated.(Model)
+	if !ok {
+		t.Fatal("tipo inesperado")
+	}
+	if got.mcp != nil || got.mcpLoading || got.mcpInFlight {
+		t.Fatalf("mcp=%v loading=%v inFlight=%v", got.mcp, got.mcpLoading, got.mcpInFlight)
+	}
+}
+
+func testToolCall(name string) api.ToolCall {
+	var c api.ToolCall
+	c.Function.Name = name
+	return c
+}
+
+func TestAllowToolsPersisteEntreTurnos(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Permissions.Bash = "ask"
+	m.cfg.Permissions.Edit = "ask"
+	calls := []api.ToolCall{testToolCall("bash"), testToolCall("write_file")}
+	if !m.callsNeedApproval(calls) {
+		t.Fatal("debería pedir permiso la primera vez")
+	}
+	m.allowTools = map[string]bool{"bash": true, "edit": true}
+	if m.callsNeedApproval(calls) {
+		t.Fatal("no debería pedir permiso tras permitir en la sesión")
+	}
+	m.run.agent = &agentRun{}
+	if m.callsNeedApproval(calls) {
+		t.Fatal("el permiso debe vivir en el Model, no en el turno")
 	}
 }
 

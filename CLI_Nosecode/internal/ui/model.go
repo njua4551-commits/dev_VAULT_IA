@@ -36,19 +36,18 @@ type toolConfirmState struct {
 
 // agentRun mantiene el bucle del agente y su historial de herramientas.
 type agentRun struct {
-	msgs         []api.ChatMessage
-	stream       *api.Streamer
-	assistant    string
-	calls        []api.ToolCall
-	pending      []api.ToolCall
-	pendingIdx   int
-	rounds       int
-	steps        int
-	sessionAllow map[string]bool
-	connecting   bool
-	ctx          context.Context
-	cancel       context.CancelFunc
-	failures     toolFailureGuard
+	msgs       []api.ChatMessage
+	stream     *api.Streamer
+	assistant  string
+	calls      []api.ToolCall
+	pending    []api.ToolCall
+	pendingIdx int
+	rounds     int
+	steps      int
+	connecting bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	failures   toolFailureGuard
 }
 
 func (a *agentRun) busy() bool {
@@ -108,45 +107,47 @@ type Message = session.Message
 
 // Model es el estado raiz de la TUI.
 type Model struct {
-	cfg        *config.Config
-	width      int
-	height     int
-	screen     screen
-	input      textarea.Model
-	msgs       []Message
-	sessions   []session.Session
-	activeID   string
-	scroll     int
-	toast      string
-	toastErr   bool
-	quit       bool
-	mode       string
-	plan       string
-	hoverBox   hitBox
-	tip        int
-	settings   settings
-	palette    palette
-	rename     renameState
-	confirm    confirmState
-	hit        *hitStore
-	run        runState
-	mcp        *mcp.Manager
-	mcpTools   []mcp.Tool
-	mcpErrs    []string
-	mcpLoading bool
-	quota      quotaState
-	tool       toolConfirmState
-	sel        selectState
-	buf        *screenBuffer
-	slashMenu  slashState
-	activity   activityState
-	contextWin int
-	usageTotal int
-	usageValid bool
-	ctxWarned  bool
+	cfg         *config.Config
+	width       int
+	height      int
+	screen      screen
+	input       textarea.Model
+	msgs        []Message
+	sessions    []session.Session
+	activeID    string
+	scroll      int
+	toast       string
+	toastErr    bool
+	quit        bool
+	mode        string
+	plan        string
+	hoverBox    hitBox
+	tip         int
+	settings    settings
+	palette     palette
+	rename      renameState
+	confirm     confirmState
+	hit         *hitStore
+	run         runState
+	mcp         *mcp.Manager
+	mcpTools    []mcp.Tool
+	mcpErrs     []string
+	mcpLoading  bool
+	mcpInFlight bool
+	quota       quotaState
+	tool        toolConfirmState
+	sel         selectState
+	buf         *screenBuffer
+	slashMenu   slashState
+	activity    activityState
+	contextWin  int
+	usageTotal  int
+	usageValid  bool
+	ctxWarned   bool
 
 	compacting       bool
 	compactingCancel context.CancelFunc
+	allowTools       map[string]bool
 
 	clickAt    time.Time
 	clickX     int
@@ -163,8 +164,9 @@ func New(cfg *config.Config) Model {
 		m.toastErr = false
 	}
 	m.contextWin = m.effectiveContextWindow()
-	if cfg.MCP.Enabled && len(cfg.MCP.Servers) > 0 {
+	if (cfg.MCP.Enabled || cfg.Tools.MCP || cfg.Tools.Browser) && len(cfg.MCP.Servers) > 0 {
 		m.mcpLoading = true
+		m.mcpInFlight = true // Init lanza la conexión; evita duplicarla al primer turno
 	}
 	return m
 }
@@ -672,9 +674,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		if strings.EqualFold(strings.Fields(text)[0], "/compact") {
 			return m.compactStart()
 		}
-		wasLoading := m.mcpLoading
 		m = m.slash(text)
-		if !wasLoading && m.mcpLoading && m.mcp == nil {
+		if m.mcpLoading && m.mcp == nil && !m.mcpInFlight && len(m.cfg.MCP.Servers) > 0 {
+			m.mcpInFlight = true
 			return m, connectMCPCmd(m.cfg.MCP.Servers)
 		}
 		return m, nil
