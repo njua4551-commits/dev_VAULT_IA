@@ -35,6 +35,18 @@ type vaultMsg struct {
 	l api.VaultLine
 }
 
+type propsMsg struct {
+	n int
+}
+
+func propsCmd(bases []string, key string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		return propsMsg{n: api.PropsContext(ctx, bases, key)}
+	}
+}
+
 func waitChunk(s *api.Streamer) tea.Cmd {
 	return func() tea.Msg { return chunkMsg{s: s, c: s.Next()} }
 }
@@ -133,6 +145,7 @@ func (m Model) startChat() (Model, tea.Cmd) {
 		IdleTimeout: 120 * time.Second,
 	})
 	m.run.stream = s
+	m = m.warnContext()
 	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
 	var tick tea.Cmd
 	m, tick = m.startActivity("model", "")
@@ -148,6 +161,11 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	}
 	c := msg.c
 	i := m.lastIdx()
+	if c.Usage != nil {
+		m.usageTotal = c.Usage.TotalTokens
+		m.usageValid = true
+		m = m.warnContext()
+	}
 	if c.Text != "" {
 		m.msgs[i].Text += c.Text
 		if m.activity.kind == "model" {
@@ -179,6 +197,15 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 		m.toast, m.toastErr = "El modelo no respondió a tiempo", true
 		if strings.TrimSpace(m.msgs[i].Text) == "" {
 			m.msgs[i].Text = "⚠ " + c.Err.Error() + "\n\n¿Está encendida la IA? Usa /up."
+		} else {
+			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
+		}
+		m.sound(soundError)
+	case api.IsContextOverflow(c.Err):
+		m.toast, m.toastErr = "Contexto lleno · usa /compact para resumir", true
+		m.ctxWarned = true
+		if strings.TrimSpace(m.msgs[i].Text) == "" {
+			m.msgs[i].Text = "⚠ " + c.Err.Error()
 		} else {
 			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
 		}
@@ -258,7 +285,15 @@ func (m Model) onVault(msg vaultMsg) (tea.Model, tea.Cmd) {
 
 // cancelBusy corta la respuesta o el comando en curso.
 func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
-	debuglog.Logf("turn cancel agent=%v stream=%v vault=%v", m.run.agent != nil, m.run.stream != nil, m.run.vault != nil)
+	debuglog.Logf("turn cancel agent=%v stream=%v vault=%v compact=%v", m.run.agent != nil, m.run.stream != nil, m.run.vault != nil, m.compacting)
+	if m.compacting {
+		if m.compactingCancel != nil {
+			m.compactingCancel()
+		}
+		m.compacting = false
+		m.compactingCancel = nil
+		m.toast, m.toastErr = "Compactación cancelada", false
+	}
 	if m.run.agent != nil {
 		if m.run.agent.cancel != nil {
 			m.run.agent.cancel()
@@ -294,6 +329,9 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 
 // cancelAll se usa al salir.
 func (m Model) cancelAll() {
+	if m.compactingCancel != nil {
+		m.compactingCancel()
+	}
 	if m.run.agent != nil {
 		if m.run.agent.cancel != nil {
 			m.run.agent.cancel()

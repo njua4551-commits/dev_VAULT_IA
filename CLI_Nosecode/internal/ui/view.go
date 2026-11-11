@@ -417,14 +417,27 @@ func (m Model) headerLines(mainW int) []uiLine {
 	return lines
 }
 
-// contextLabel resume el uso de contexto: «~33 tok · 1%».
+// contextLabel resume el uso de contexto: «~33 tok · 1%» (sin ~ si el
+// servidor reportó usage real). A partir del 80 % sugiere /compact.
 func (m Model) contextLabel() string {
-	_, p := m.cfg.Active()
-	tokens := m.tokensValue()
-	if p.ContextWindow > 0 {
-		return fmt.Sprintf("~%d tok · %d%%", tokens, tokens*100/p.ContextWindow)
+	win := m.contextWin
+	if win <= 0 {
+		win = m.effectiveContextWindow()
 	}
-	return fmt.Sprintf("~%d tok", tokens)
+	tokens := m.contextUsed()
+	prefix := "~"
+	if m.usageValid {
+		prefix = ""
+	}
+	if win > 0 {
+		pct := tokens * 100 / win
+		label := fmt.Sprintf("%s%d tok · %d%%", prefix, tokens, pct)
+		if pct >= 80 {
+			label += " · /compact"
+		}
+		return label
+	}
+	return fmt.Sprintf("%s%d tok", prefix, tokens)
 }
 
 // railLines es la barra lateral derecha de opencode: panel con el título,

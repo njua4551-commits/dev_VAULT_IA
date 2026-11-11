@@ -179,6 +179,7 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 		a.msgs = append([]api.ChatMessage{{Role: "system", Content: m.systemPrompt()}}, history...)
 	}
 	microcompact(a.msgs, m.cfg.Tools.CompactKeep)
+	m = m.warnContext()
 	_, p := m.cfg.Active()
 	model := strings.TrimSpace(p.Model)
 	if model == "" {
@@ -331,6 +332,11 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	}
 	c := msg.c
 	i := m.lastIdx()
+	if c.Usage != nil {
+		m.usageTotal = c.Usage.TotalTokens
+		m.usageValid = true
+		m = m.warnContext()
+	}
 	if c.Text != "" {
 		a.assistant += c.Text
 		m.msgs[i].Text += c.Text
@@ -367,6 +373,10 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 			m.toast, m.toastErr = "Agente cancelado", false
 		case errors.Is(c.Err, api.ErrModelIdle):
 			m.toast, m.toastErr = "El modelo no respondió a tiempo", true
+			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
+		case api.IsContextOverflow(c.Err):
+			m.toast, m.toastErr = "Contexto lleno · usa /compact para resumir", true
+			m.ctxWarned = true
 			m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
 		default:
 			m.toast, m.toastErr = "Error del agente: "+c.Err.Error(), true

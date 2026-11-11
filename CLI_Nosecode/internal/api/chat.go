@@ -87,6 +87,8 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string {
 	switch {
+	case e.contextOverflow():
+		return "contexto lleno: el prompt superó la ventana del modelo. Usa /compact para resumir la conversación."
 	case e.Code == 401:
 		return "API key incorrecta (401)"
 	case e.Code == 400 || e.Code == 404 || e.Code == 422:
@@ -97,6 +99,24 @@ func (e *HTTPError) Error() string {
 		return fmt.Sprintf("tunel caido o IA no responde (%d)", e.Code)
 	}
 	return fmt.Sprintf("error HTTP %d %s", e.Code, e.Body)
+}
+
+// contextOverflow reconoce el 400 de llama-server cuando el prompt no cabe.
+func (e *HTTPError) contextOverflow() bool {
+	if e.Code != http.StatusBadRequest {
+		return false
+	}
+	body := strings.ToLower(e.Body)
+	return strings.Contains(body, "exceeds the available context size") ||
+		strings.Contains(body, "context size") ||
+		strings.Contains(body, "context length") ||
+		strings.Contains(body, "too many tokens")
+}
+
+// IsContextOverflow indica si el error es un prompt que superó la ventana.
+func IsContextOverflow(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.contextOverflow()
 }
 
 // retryable dice si conviene probar otro tunel (la clave mala no se arregla cambiando de tunel).
@@ -113,11 +133,19 @@ func (e *HTTPError) retryable() bool {
 	return e.Code >= 500
 }
 
+// Usage es el consumo real que reporta el servidor (llama-server/OpenAI).
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 // Chunk es un trozo de la respuesta. Cuando Done es true el flujo termino
 // (Err vale nil si fue bien, ErrCanceled si se cancelo, u otro error).
 type Chunk struct {
 	Text      string
 	ToolCalls []ToolCallDelta
+	Usage     *Usage
 	Done      bool
 	Err       error
 	Base      string // URL base que respondio (util para avisar de un cambio de tunel)
@@ -328,8 +356,35 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Usage   *Usage `json:"usage"`
+			Timings *struct {
+				PromptN    int `json:"prompt_n"`
+				PredictedN int `json:"predicted_n"`
+			} `json:"timings"`
 		}
-		if json.Unmarshal([]byte(payload), &ev) != nil || len(ev.Choices) == 0 {
+		if json.Unmarshal([]byte(payload), &ev) != nil {
+			continue
+		}
+		usage := ev.Usage
+		if usage == nil && ev.Timings != nil && (ev.Timings.PromptN > 0 || ev.Timings.PredictedN > 0) {
+			usage = &Usage{
+				PromptTokens:     ev.Timings.PromptN,
+				CompletionTokens: ev.Timings.PredictedN,
+				TotalTokens:      ev.Timings.PromptN + ev.Timings.PredictedN,
+			}
+		}
+		if usage != nil {
+			if usage.TotalTokens == 0 {
+				usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			}
+			if usage.TotalTokens > 0 && !send(Chunk{Usage: usage, Base: base}) {
+				if idleHit.Load() {
+					return got, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
+				}
+				return got, actx.Err()
+			}
+		}
+		if len(ev.Choices) == 0 {
 			continue
 		}
 		d := ev.Choices[0].Delta

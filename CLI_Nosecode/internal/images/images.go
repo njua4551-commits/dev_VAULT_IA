@@ -15,7 +15,7 @@ import (
 )
 
 // MaxDimension es el lado máximo de una imagen enviada al modelo.
-const MaxDimension = 1280
+const MaxDimension = 1024
 
 // Prepare decodifica una imagen, la reduce si hace falta y devuelve JPEG.
 func Prepare(data []byte, mime string) (string, []byte, error) {

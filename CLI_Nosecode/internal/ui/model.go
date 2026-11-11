@@ -145,6 +145,9 @@ type Model struct {
 	usageValid bool
 	ctxWarned  bool
 
+	compacting       bool
+	compactingCancel context.CancelFunc
+
 	clickAt    time.Time
 	clickX     int
 	clickY     int
@@ -221,6 +224,11 @@ func (m Model) Init() tea.Cmd {
 	if m.mcpLoading {
 		cmds = append(cmds, connectMCPCmd(m.cfg.MCP.Servers))
 	}
+	if m.providerReady() {
+		_, p := m.cfg.Active()
+		cmds = append(cmds, propsCmd(api.Bases(p.BaseURL, config.VaultHome()), p.APIKey))
+	}
+	debuglog.Logf("startup context_window=%d", m.contextWin)
 	return tea.Batch(cmds...)
 }
 
@@ -241,6 +249,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.onAgentChunk(msg)
 		}
 		return m.onChunk(msg)
+	case compactDoneMsg:
+		return m.onCompactDone(msg)
+	case propsMsg:
+		if msg.n > 0 {
+			m.contextWin = msg.n
+			debuglog.Logf("props n_ctx=%d", msg.n)
+		}
+		return m, nil
 	case mcpReadyMsg:
 		return m.onMCPReady(msg)
 	case toolDoneMsg:
@@ -350,7 +366,7 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		return m.toggleMode(), nil
 	case "f8":
-		if m.run.busy() {
+		if m.run.busy() || m.compacting {
 			m.toast, m.toastErr = "Espera a que termine o pulsa esc para cancelar", false
 			return m, nil
 		}
@@ -369,7 +385,7 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.input.Value()) == "" {
 			return m, nil
 		}
-		if m.run.busy() {
+		if m.run.busy() || m.compacting {
 			m.toast, m.toastErr = "Espera a que termine o pulsa esc para cancelar", false
 			return m, nil
 		}
@@ -378,7 +394,7 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.InsertString("\n")
 		return m, nil
 	case "esc":
-		if m.run.busy() {
+		if m.run.busy() || m.compacting {
 			return m.cancelBusy()
 		}
 		if m.sel.active || m.sel.moved {
@@ -652,6 +668,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(text, "/") {
 		if cmd, ok := vaultCommand(text); ok {
 			return m.startVault(cmd)
+		}
+		if strings.EqualFold(strings.Fields(text)[0], "/compact") {
+			return m.compactStart()
 		}
 		wasLoading := m.mcpLoading
 		m = m.slash(text)
@@ -1053,6 +1072,13 @@ func (m Model) deleteSessionConfirmed() Model {
 	return m
 }
 
+func (m Model) resetContextUsage() Model {
+	m.usageValid = false
+	m.usageTotal = 0
+	m.ctxWarned = false
+	return m
+}
+
 func (m Model) loadSession(id string) Model {
 	if id == m.activeID {
 		return m
@@ -1062,6 +1088,7 @@ func (m Model) loadSession(id string) Model {
 		if s.ID == id {
 			m.activeID = id
 			m.msgs = append([]Message{}, s.Messages...)
+			m = m.resetContextUsage()
 			m.scroll = 0
 			m.input.Reset()
 			m.toast = ""
@@ -1084,6 +1111,7 @@ func (m Model) newSession() Model {
 	m.sessions = append(m.sessions, s)
 	m.activeID = s.ID
 	m.msgs = nil
+	m = m.resetContextUsage()
 	m.scroll = 0
 	m.input.Reset()
 	m.toast = "Sesión creada"
@@ -1120,6 +1148,7 @@ func (m Model) closeSession(id string) Model {
 	}
 	m.activeID = m.sessions[next].ID
 	m.msgs = append([]Message{}, m.sessions[next].Messages...)
+	m = m.resetContextUsage()
 	m.scroll = 0
 	m.input.Reset()
 	m.toast = "Sesión eliminada"
@@ -1206,6 +1235,65 @@ func (m Model) tokensValue() int {
 	return total
 }
 
+// contextEstimate aproxima el prompt completo: sistema, herramientas e historial.
+func (m Model) contextEstimate() int {
+	if a := m.run.agent; a != nil && len(a.msgs) > 0 {
+		total := m.apiToolTokens()
+		for _, msg := range a.msgs {
+			total += estimateTokens(messageText(msg))
+		}
+		return total
+	}
+	return estimateTokens(m.systemPrompt()) + estimateTokens(m.plan) + m.tokensValue()
+}
+
+func messageText(msg api.ChatMessage) string {
+	switch c := msg.Content.(type) {
+	case string:
+		return c
+	case []api.ContentPart:
+		var b strings.Builder
+		for _, p := range c {
+			b.WriteString(p.Text)
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// contextUsed prefiere el usage real del servidor; si no, estima.
+func (m Model) contextUsed() int {
+	if m.usageValid && m.usageTotal > 0 {
+		return m.usageTotal
+	}
+	return m.contextEstimate()
+}
+
+func (m Model) contextPercent() int {
+	win := m.contextWin
+	if win <= 0 {
+		win = m.effectiveContextWindow()
+	}
+	if win <= 0 {
+		return 0
+	}
+	return m.contextUsed() * 100 / win
+}
+
+// warnContext avisa una sola vez al llegar al 80 % de la ventana.
+func (m Model) warnContext() Model {
+	if m.ctxWarned {
+		return m
+	}
+	if pct := m.contextPercent(); pct >= 80 {
+		m.ctxWarned = true
+		if !m.toastErr {
+			m.toast = "Contexto al " + strconv.Itoa(pct) + "% · usa /compact para resumir"
+		}
+	}
+	return m
+}
+
 func (m Model) isHover(action, arg string) bool {
 	return m.hoverBox.action == action && m.hoverBox.arg == arg
 }
@@ -1255,6 +1343,7 @@ var helpText = strings.Join([]string{
 	"  /rename     renombrar sesión",
 	"  /delete     eliminar sesión",
 	"  /tools      herramientas activas y tokens; browser/mcp on|off",
+	"  /compact    resumir la conversación para ahorrar contexto",
 	"  /vault      importar endpoint del Vault",
 	"  /up         encender la IA en Kaggle (vault.py up)",
 	"  /down       apagar la IA y dejar de gastar GPU (F8)",
