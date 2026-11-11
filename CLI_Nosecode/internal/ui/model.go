@@ -8,6 +8,7 @@ import (
 
 	"nosecode/internal/api"
 	"nosecode/internal/config"
+	"nosecode/internal/debuglog"
 	"nosecode/internal/mcp"
 	"nosecode/internal/session"
 
@@ -43,7 +44,7 @@ type agentRun struct {
 	pendingIdx   int
 	rounds       int
 	steps        int
-	allowSession bool
+	sessionAllow map[string]bool
 	connecting   bool
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -139,6 +140,10 @@ type Model struct {
 	buf        *screenBuffer
 	slashMenu  slashState
 	activity   activityState
+	contextWin int
+	usageTotal int
+	usageValid bool
+	ctxWarned  bool
 
 	clickAt    time.Time
 	clickX     int
@@ -153,6 +158,10 @@ func New(cfg *config.Config) Model {
 		_ = cfg.Save()
 		m.toast = "Proveedor actualizado: " + strings.TrimSuffix(url, "/v1")
 		m.toastErr = false
+	}
+	m.contextWin = m.effectiveContextWindow()
+	if cfg.MCP.Enabled && len(cfg.MCP.Servers) > 0 {
+		m.mcpLoading = true
 	}
 	return m
 }
@@ -178,6 +187,7 @@ func newModel(cfg *config.Config, withSessions bool) Model {
 		tip:    int(time.Now().Unix()) % len(tips),
 	}
 	m.input.Placeholder = m.placeholder()
+	m.contextWin = m.effectiveContextWindow()
 
 	if !withSessions {
 		return m
@@ -204,7 +214,14 @@ func newModel(cfg *config.Config, withSessions bool) Model {
 
 // Init implementa tea.Model.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.fetchQuota(), quotaTickCmd())
+	defs := m.apiTools()
+	debuglog.Logf("startup tools=%d approx_tokens=%d browser=%v mcp=%v",
+		len(defs), toolDefsTokens(defs), m.cfg.Tools.Browser, m.cfg.Tools.MCP)
+	cmds := []tea.Cmd{m.fetchQuota(), quotaTickCmd()}
+	if m.mcpLoading {
+		cmds = append(cmds, connectMCPCmd(m.cfg.MCP.Servers))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update implementa tea.Model.
@@ -636,7 +653,12 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		if cmd, ok := vaultCommand(text); ok {
 			return m.startVault(cmd)
 		}
-		return m.slash(text), nil
+		wasLoading := m.mcpLoading
+		m = m.slash(text)
+		if !wasLoading && m.mcpLoading && m.mcp == nil {
+			return m, connectMCPCmd(m.cfg.MCP.Servers)
+		}
+		return m, nil
 	}
 
 	m.msgs = append(m.msgs, Message{Role: "user", Text: text})
@@ -755,8 +777,10 @@ func (m Model) slash(text string) Model {
 		m = m.importVault()
 	case "/copy", "/copiar":
 		return m.copyCommand(rest)
-	case "/mcp", "/tools":
+	case "/mcp":
 		return m.mcpSlash(rest)
+	case "/tools":
+		return m.toolsSlash(rest)
 	case "/agent":
 		return m.toggleAgent()
 	default:
@@ -1166,6 +1190,14 @@ func (m Model) inputBoxWidth() int {
 	return w
 }
 
+func (m Model) effectiveContextWindow() int {
+	_, p := m.cfg.Active()
+	if p.ContextWindow > 0 {
+		return p.ContextWindow
+	}
+	return config.DefaultContextWindow
+}
+
 func (m Model) tokensValue() int {
 	total := 0
 	for _, msg := range m.msgs {
@@ -1222,6 +1254,7 @@ var helpText = strings.Join([]string{
 	"  /sessions   cambiar de sesión",
 	"  /rename     renombrar sesión",
 	"  /delete     eliminar sesión",
+	"  /tools      herramientas activas y tokens; browser/mcp on|off",
 	"  /vault      importar endpoint del Vault",
 	"  /up         encender la IA en Kaggle (vault.py up)",
 	"  /down       apagar la IA y dejar de gastar GPU (F8)",

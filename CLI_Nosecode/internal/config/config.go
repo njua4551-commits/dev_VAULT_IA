@@ -13,7 +13,19 @@ import (
 	"strings"
 )
 
-const CurrentVersion = 2
+const (
+	CurrentVersion       = 2
+	DefaultContextWindow = 131072
+	DefaultCompactKeep   = 6
+)
+
+// ToolSettings controla que herramientas se envían al modelo. Las nativas
+// siempre están activas; navegador y MCP se activan a mano con /tools.
+type ToolSettings struct {
+	Browser     bool `json:"browser"`
+	MCP         bool `json:"mcp"`
+	CompactKeep int  `json:"compact_keep"`
+}
 
 // Provider describe un endpoint compatible con la API de OpenAI.
 type Provider struct {
@@ -68,6 +80,7 @@ type Config struct {
 	Providers       map[string]Provider `json:"providers"`
 	Permissions     Permissions         `json:"permissions"`
 	UI              UI                  `json:"ui"`
+	Tools           ToolSettings        `json:"tools"`
 	MCP             MCP                 `json:"mcp"`
 
 	// Path es la ruta desde la que se cargo (no se escribe en el JSON).
@@ -113,6 +126,7 @@ func Defaults() *Config {
 			"vault": {Type: "openai"},
 		},
 		Permissions: Permissions{Bash: "ask", Edit: "ask", Webfetch: "ask", MCP: "ask"},
+		Tools:       ToolSettings{CompactKeep: DefaultCompactKeep},
 		MCP:         MCP{Servers: map[string]MCPServer{}},
 		UI: UI{
 			Theme:      "vercel",
@@ -213,6 +227,9 @@ func (c *Config) normalize() {
 	}
 	if c.Permissions.MCP == "" {
 		c.Permissions.MCP = "ask"
+	}
+	if c.Tools.CompactKeep <= 0 {
+		c.Tools.CompactKeep = DefaultCompactKeep
 	}
 	if c.MCP.Servers == nil {
 		c.MCP.Servers = map[string]MCPServer{}

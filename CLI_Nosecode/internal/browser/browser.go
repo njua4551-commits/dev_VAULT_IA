@@ -177,10 +177,13 @@ func executableFromCommand(command string) (string, error) {
 }
 
 // IsChromium indica si el ejecutable acepta el protocolo CDP de Chromium.
+// Normaliza separadores de Windows y Linux antes de usar filepath.Base.
 func IsChromium(exe string) bool {
-	switch strings.ToLower(filepath.Base(exe)) {
+	normalized := strings.ReplaceAll(exe, "\\", string(filepath.Separator))
+	switch strings.ToLower(filepath.Base(normalized)) {
 	case "brave.exe", "brave-browser.exe", "chrome.exe", "msedge.exe",
-		"chromium.exe", "opera.exe", "vivaldi.exe":
+		"chromium.exe", "opera.exe", "vivaldi.exe", "brave", "brave-browser",
+		"google-chrome", "chromium", "microsoft-edge", "opera", "vivaldi":
 		return true
 	}
 	return false

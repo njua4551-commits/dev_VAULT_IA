@@ -141,7 +141,7 @@ func TestChatEscCancela(t *testing.T) {
 	// esc cancela
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = nm.(Model)
-	if m.run.busy() || !strings.Contains(m.toast, "cancelada") {
+	if m.run.busy() || !strings.Contains(m.toast, "cancelad") {
 		t.Fatalf("busy=%v toast=%q", m.run.busy(), m.toast)
 	}
 	// el comando pendiente devuelve un mensaje viejo: se ignora sin romper nada

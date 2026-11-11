@@ -17,6 +17,7 @@ import (
 	"nosecode/internal/debuglog"
 	"nosecode/internal/images"
 	"nosecode/internal/mcp"
+	"nosecode/internal/tools"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -85,18 +86,14 @@ func (a *agentRun) beginStep() bool {
 
 const mcpConnectingText = "⏳ Conectando herramientas MCP…"
 
-const agentSystem = "Eres Nosecode, un agente de terminal con herramientas MCP para observar y " +
-	"controlar la máquina del usuario. Nunca digas que no tienes acceso a la pantalla: usa las " +
-	"herramientas. Reglas:\n" +
-	"1. Para saber qué ventanas hay, llama a una herramienta list_windows. No inventes nombres ni " +
-	"afirmes que una aplicación está abierta sin el resultado de la herramienta.\n" +
-	"2. Para abrir una aplicación en Windows: press_keys(keys=\"win+r\"), type_text(text=\"calc\"), " +
-	"press_keys(keys=\"enter\") y después list_windows para verificar. Si el usuario pide otra app, " +
-	"usa su nombre o ejecutable (notepad, mspaint, explorer...).\n" +
-	"3. Para ver la pantalla usa take_screenshot; para hacer clic, antes localiza el punto con una " +
-	"captura y usa coordenadas relativas a la ventana.\n" +
-	"4. Usa una herramienta solo cuando haga falta, con argumentos válidos. Espera el resultado real " +
+const agentSystem = "Eres Nosecode, un agente de terminal con herramientas nativas para leer y " +
+	"escribir archivos, ejecutar comandos, buscar, capturar pantalla, ver imágenes, descargar webs " +
+	"y guardar memoria. Reglas:\n" +
+	"1. Usa una herramienta solo cuando haga falta, con argumentos válidos. Espera el resultado real " +
 	"antes de continuar. Si falla, explica el error y prueba otra acción.\n" +
+	"2. Para rutas usa el formato del sistema; no inventes contenido de archivos ni resultados.\n" +
+	"3. Antes de editar, lee el archivo y usa edit_file con el texto exacto y único.\n" +
+	"4. No ejecutes comandos destructivos sin explicar qué harás y por qué.\n" +
 	"5. Responde en español, breve y claro. No inventes resultados."
 
 type mcpReadyMsg struct {
@@ -113,38 +110,27 @@ type toolDoneMsg struct {
 }
 
 func (m Model) useAgent() bool {
-	return m.cfg.MCP.Enabled && len(m.cfg.MCP.Servers) > 0 &&
-		m.cfg.Permissions.MCP != "deny" && m.mode != "plan"
+	return m.mode != "plan"
 }
 
 func (m Model) startAgent() (Model, tea.Cmd) {
-	if m.mcp == nil {
-		if m.mcpLoading {
-			m.toast, m.toastErr = "Conectando herramientas MCP… espera un momento", false
-			return m, nil
-		}
-		m.mcpLoading = true
-		m.run.agent = &agentRun{connecting: true}
-		n := len(m.cfg.MCP.Servers)
-		m.msgs = append(m.msgs, Message{Role: "assistant",
-			Text: fmt.Sprintf("%s (%d servidores)", mcpConnectingText, n)})
-		m.scroll = 0
-		m.toast, m.toastErr = "Conectando herramientas MCP… (máx. 8 s por servidor)", false
-		debuglog.Logf("mcp connect start servers=%d", n)
-		m.layout()
-		return m, connectMCPCmd(m.cfg.MCP.Servers)
-	}
-	if len(m.mcpTools) == 0 {
-		return m.startChat()
-	}
+	m.run.agent = &agentRun{}
 	return m.beginAgent()
 }
 
 func connectMCPCmd(servers map[string]config.MCPServer) tea.Cmd {
 	return func() tea.Msg {
+		debuglog.Logf("mcp phase=connecting servers=%d timeout=70s", len(servers))
 		ctx, cancel := context.WithTimeout(context.Background(), 70*time.Second)
 		defer cancel()
 		mgr, errs := mcp.ConnectAll(ctx, servers)
+		for _, e := range errs {
+			debuglog.Logf("mcp phase=error %s", oneLine(e, 220))
+		}
+		if ctx.Err() != nil {
+			debuglog.Logf("mcp phase=timeout after 70s")
+		}
+		debuglog.Logf("mcp phase=ready servers=%d tools=%d errors=%d", mcpServerCount(mgr), len(mgr.Tools()), len(errs))
 		return mcpReadyMsg{manager: mgr, tools: mgr.Tools(), errs: errs}
 	}
 }
@@ -159,20 +145,12 @@ func (m Model) onMCPReady(msg mcpReadyMsg) (tea.Model, tea.Cmd) {
 	m.mcpTools = msg.tools
 	m.mcpErrs = msg.errs
 	debuglog.Logf("mcp ready tools=%d servers=%d errors=%d", len(msg.tools), mcpServerCount(msg.manager), len(msg.errs))
-	if m.run.agent == nil {
-		if len(m.mcpTools) > 0 {
-			m.toast = mcpReadyToast(msg.tools, msg.errs, msg.manager)
-		}
-		return m, nil
+	if len(m.mcpTools) > 0 {
+		m.toast = mcpReadyToast(msg.tools, msg.errs, msg.manager)
+	} else if len(msg.errs) > 0 {
+		m.toast, m.toastErr = "MCP sin herramientas: "+oneLine(msg.errs[0], 80), true
 	}
-	m.run.agent = nil
-	if len(m.mcpTools) == 0 {
-		m.toast, m.toastErr = "MCP sin herramientas; sigo en chat normal", true
-		return m.startChat()
-	}
-	m.run.agent = &agentRun{}
-	m.toast = mcpReadyToast(msg.tools, msg.errs, msg.manager)
-	return m.beginAgent()
+	return m, nil
 }
 
 func (m Model) clearConnecting() Model {
@@ -198,25 +176,27 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 	}
 	if len(a.msgs) == 0 {
 		history := apiMessages(m.msgs, false)
-		a.msgs = append([]api.ChatMessage{{Role: "system", Content: agentSystem}}, history...)
+		a.msgs = append([]api.ChatMessage{{Role: "system", Content: m.systemPrompt()}}, history...)
 	}
+	microcompact(a.msgs, m.cfg.Tools.CompactKeep)
 	_, p := m.cfg.Active()
 	model := strings.TrimSpace(p.Model)
 	if model == "" {
 		model = "default"
 	}
+	defs := m.apiTools()
 	s := api.Stream(a.ctx, api.Request{
 		Bases:       api.Bases(p.BaseURL, config.VaultHome()),
 		APIKey:      p.APIKey,
 		Model:       model,
 		Messages:    a.msgs,
-		Tools:       m.apiTools(),
+		Tools:       defs,
 		IdleTimeout: 120 * time.Second,
 	})
 	a.stream = s
 	a.assistant = ""
 	a.calls = nil
-	debuglog.Logf("model request step=%d msgs=%d tools=%d", a.steps, len(a.msgs), len(m.apiTools()))
+	debuglog.Logf("model request step=%d msgs=%d tools=%d tool_tokens=%d", a.steps, len(a.msgs), len(defs), toolDefsTokens(defs))
 	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
 	var tick tea.Cmd
 	m, tick = m.startActivity("model", "")
@@ -226,28 +206,122 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 	return m, tea.Batch(waitChunk(s), tick)
 }
 
-func (m Model) apiTools() []api.ToolDef {
-	out := make([]api.ToolDef, 0, len(m.mcpTools))
-	for _, t := range m.mcpTools {
-		if a := m.run.agent; a != nil {
-			if _, blocked := a.failures.blockedReason(t.Wire); blocked {
-				continue
-			}
+var browserToolNames = []string{"browser_navigate", "browser_click", "browser_type"}
+
+func isBrowserShort(name string) bool {
+	for _, n := range browserToolNames {
+		if name == n {
+			return true
 		}
-		schema := t.Schema
+	}
+	return false
+}
+
+func (m Model) nativeToolAllowed(name string) bool {
+	switch name {
+	case "bash":
+		return m.cfg.Permissions.Bash != "deny"
+	case "write_file", "edit_file":
+		return m.cfg.Permissions.Edit != "deny"
+	case "web_fetch":
+		return m.cfg.Permissions.Webfetch != "deny"
+	default:
+		return true
+	}
+}
+
+func (m Model) mcpToolByShort(name string) (mcp.Tool, bool) {
+	for _, t := range m.mcpTools {
+		if shortTool(t.Wire) == name {
+			return t, true
+		}
+	}
+	return mcp.Tool{}, false
+}
+
+func (m Model) apiTools() []api.ToolDef {
+	out := make([]api.ToolDef, 0, len(tools.Builtins())+len(m.mcpTools))
+	appendDef := func(name, description string, schema json.RawMessage) {
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		out = append(out, api.ToolDef{
 			Type: "function",
 			Function: api.FunctionDef{
-				Name:        t.Wire,
-				Description: t.Server + ": " + t.Description,
+				Name:        name,
+				Description: oneLine(description, 160),
 				Parameters:  schema,
 			},
 		})
 	}
+	for _, t := range tools.Builtins() {
+		if !m.nativeToolAllowed(t.Name) {
+			continue
+		}
+		appendDef(t.Name, t.Description, t.Parameters)
+	}
+	if m.cfg.Tools.Browser && m.cfg.Permissions.MCP != "deny" {
+		for _, name := range browserToolNames {
+			if t, ok := m.mcpToolByShort(name); ok {
+				appendDef(name, t.Description, t.Schema)
+			}
+		}
+	}
+	if m.cfg.Tools.MCP && m.cfg.Permissions.MCP != "deny" {
+		for _, t := range m.mcpTools {
+			if isBrowserShort(shortTool(t.Wire)) {
+				continue
+			}
+			appendDef(t.Wire, t.Server+": "+t.Description, t.Schema)
+		}
+	}
+	if a := m.run.agent; a != nil {
+		kept := out[:0]
+		for _, d := range out {
+			if _, blocked := a.failures.blockedReason(d.Function.Name); blocked {
+				continue
+			}
+			kept = append(kept, d)
+		}
+		out = kept
+	}
 	return out
+}
+
+func toolDefsTokens(defs []api.ToolDef) int {
+	b, err := json.Marshal(defs)
+	if err != nil {
+		return 0
+	}
+	return estimateTokens(string(b))
+}
+
+func (m Model) apiToolTokens() int { return toolDefsTokens(m.apiTools()) }
+
+func (m Model) systemPrompt() string {
+	prompt := agentSystem
+	data, err := os.ReadFile(tools.MemoryPath())
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		return prompt
+	}
+	mem := tools.TruncateText(strings.TrimSpace(string(data)), 8<<10)
+	return prompt + "\n\nMemoria del proyecto (NOSECODE.md):\n" + mem
+}
+
+func microcompact(msgs []api.ChatMessage, keep int) {
+	if keep < 0 {
+		keep = 0
+	}
+	seen := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "tool" {
+			continue
+		}
+		seen++
+		if seen > keep {
+			msgs[i].Content = "[salida borrada]"
+		}
+	}
 }
 
 func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
@@ -312,7 +386,8 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(assistantText) == "" {
 		m.msgs[i].Text = "⚙ " + toolNames(calls)
 	}
-	if a.allowSession || m.cfg.Permissions.MCP == "allow" {
+	calls = approvalFirst(calls)
+	if !m.callsNeedApproval(calls) {
 		a.pending = calls
 		a.pendingIdx = 0
 		return m.executeNextTool()
@@ -320,6 +395,60 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	m.tool = toolConfirmState{calls: calls}
 	m.screen = screenTool
 	return m, nil
+}
+
+func approvalCategory(name string) (string, bool) {
+	switch name {
+	case "bash":
+		return "bash", true
+	case "write_file", "edit_file":
+		return "edit", true
+	}
+	if isBrowserShort(name) {
+		return "browser", true
+	}
+	if strings.Contains(name, "__") {
+		return "mcp", true
+	}
+	return "", false
+}
+
+func (m Model) approvalAllowed(category string, a *agentRun) bool {
+	if a != nil && a.sessionAllow[category] {
+		return true
+	}
+	switch category {
+	case "bash":
+		return m.cfg.Permissions.Bash == "allow"
+	case "edit":
+		return m.cfg.Permissions.Edit == "allow"
+	default:
+		return m.cfg.Permissions.MCP == "allow"
+	}
+}
+
+func (m Model) callsNeedApproval(calls []api.ToolCall) bool {
+	for _, c := range calls {
+		if cat, ok := approvalCategory(c.Function.Name); ok {
+			if !m.approvalAllowed(cat, m.run.agent) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func approvalFirst(calls []api.ToolCall) []api.ToolCall {
+	sensitive := make([]api.ToolCall, 0, len(calls))
+	rest := make([]api.ToolCall, 0, len(calls))
+	for _, c := range calls {
+		if _, ok := approvalCategory(c.Function.Name); ok {
+			sensitive = append(sensitive, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+	return append(sensitive, rest...)
 }
 
 func mergeToolCalls(a *agentRun, deltas []api.ToolCallDelta) {
@@ -391,6 +520,18 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		return m.executeNextTool()
 	}
 
+	native, isNative := tools.Lookup(call.Function.Name)
+	wire := ""
+	if !isNative {
+		var ok bool
+		wire, ok = m.resolveMCPWire(call.Function.Name)
+		if !ok {
+			m = m.appendToolResult(call, "herramienta no disponible o desactivada; no la reintentes", nil, true)
+			a.pendingIdx++
+			return m.executeNextTool()
+		}
+	}
+
 	var tick tea.Cmd
 	m, tick = m.startActivity("tool", shortTool(call.Function.Name))
 	m.toast = "Ejecutando " + shortTool(call.Function.Name) + "…"
@@ -400,10 +541,14 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 	}
 	mgr := m.mcp
 	servers := m.cfg.MCP.Servers
-	browserTool := isBrowserTool(call.Function.Name)
-	debuglog.Logf("tool start name=%s browser=%v", call.Function.Name, browserTool)
+	browserTool := isBrowserShort(call.Function.Name)
+	debuglog.Logf("tool start name=%s native=%v browser=%v", call.Function.Name, isNative, browserTool)
 	cmd := func() tea.Msg {
 		start := time.Now()
+		if isNative {
+			res := native.Run(ctx, json.RawMessage(call.Function.Arguments))
+			return toolDoneMsg{call: call, result: nativeResult(res), duration: time.Since(start)}
+		}
 		if mgr == nil {
 			return toolDoneMsg{call: call, err: errors.New("MCP no conectado"), duration: time.Since(start)}
 		}
@@ -413,10 +558,42 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 			}
 		}
 		args := json.RawMessage(call.Function.Arguments)
-		res, err := mgr.Call(ctx, call.Function.Name, args)
+		res, err := mgr.Call(ctx, wire, args)
 		return toolDoneMsg{call: call, result: res, err: err, duration: time.Since(start)}
 	}
 	return m, tea.Batch(cmd, tick)
+}
+
+func nativeResult(r tools.Result) mcp.Result {
+	out := mcp.Result{Text: r.Text, Error: r.Error}
+	for _, img := range r.Images {
+		out.Images = append(out.Images, mcp.Image{MIME: img.MIME, Data: img.Data})
+	}
+	return out
+}
+
+func (m Model) resolveMCPWire(name string) (string, bool) {
+	if m.mcp == nil || m.cfg.Permissions.MCP == "deny" {
+		return "", false
+	}
+	if isBrowserShort(name) {
+		if !m.cfg.Tools.Browser {
+			return "", false
+		}
+		if t, ok := m.mcpToolByShort(name); ok {
+			return t.Wire, true
+		}
+		return "", false
+	}
+	if !m.cfg.Tools.MCP {
+		return "", false
+	}
+	for _, t := range m.mcpTools {
+		if t.Wire == name && !isBrowserShort(shortTool(t.Wire)) {
+			return t.Wire, true
+		}
+	}
+	return "", false
 }
 
 func (m Model) appendToolResult(call api.ToolCall, text string, imgs []api.ContentPart, isErr bool) Model {
@@ -569,7 +746,9 @@ func (m Model) finishAgent() Model {
 	m.run.agent = nil
 	m.screen = screenChat
 	m = m.stopActivity()
-	m.toast, m.toastErr = "", false
+	if !m.toastErr {
+		m.toast = ""
+	}
 	m.sound(soundDone)
 	m = m.saveActive()
 	m.layout()
@@ -594,7 +773,14 @@ func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.executeNextTool()
 	case "a":
 		m.screen = screenChat
-		a.allowSession = true
+		if a.sessionAllow == nil {
+			a.sessionAllow = map[string]bool{}
+		}
+		for _, call := range m.tool.calls {
+			if cat, ok := approvalCategory(call.Function.Name); ok {
+				a.sessionAllow[cat] = true
+			}
+		}
 		a.pending = m.tool.calls
 		a.pendingIdx = 0
 		return m.executeNextTool()
@@ -636,13 +822,20 @@ func (m Model) toolScreen() []uiLine {
 	}
 	call := m.tool.calls[0]
 	server, tool := splitWire(call.Function.Name)
+	if server == "" {
+		if isBrowserShort(call.Function.Name) {
+			server = "Navegador"
+		} else {
+			server = "Nosecode"
+		}
+	}
 	head := []uiLine{{
 		text: modalTitleStyle.Render("Permiso de herramienta") +
 			spaces(maxInt(0, innerW-lipgloss.Width("Permiso de herramienta")-lipgloss.Width("esc cancelar turno"))) +
 			faintStyle.Render("esc cancelar turno"),
 	}}
 	body := []uiLine{
-		{text: faintStyle.Render("Servidor   ") + textStyle.Render(server)},
+		{text: faintStyle.Render("Origen     ") + textStyle.Render(server)},
 		{text: faintStyle.Render("Herramienta ") + titleStyle.Render(tool)},
 		{},
 		{text: faintStyle.Render("Argumentos")},
@@ -760,10 +953,15 @@ func (m Model) mcpSlash(rest string) Model {
 		m.saveCfg()
 		if !m.cfg.MCP.Enabled {
 			m.closeMCP()
+		} else if m.mcp == nil && !m.mcpLoading && len(m.cfg.MCP.Servers) > 0 {
+			m.mcpLoading = true
 		}
 		m.toast = "Agente MCP: " + onOff(m.cfg.MCP.Enabled)
 	case "reload", "recargar":
 		m.closeMCP()
+		if len(m.cfg.MCP.Servers) > 0 {
+			m.mcpLoading = true
+		}
 		m.toast = "MCP se reconectará en el próximo mensaje"
 	case "tools", "herramientas":
 		if m.mcp == nil {
@@ -806,11 +1004,69 @@ func (m Model) mcpSlash(rest string) Model {
 	return m
 }
 
+func (m Model) toolsSlash(rest string) Model {
+	args := strings.Fields(strings.ToLower(rest))
+	if len(args) == 0 {
+		defs := m.apiTools()
+		var b strings.Builder
+		fmt.Fprintf(&b, "Herramientas activas: %d (~%d tokens)\n", len(defs), toolDefsTokens(defs))
+		for _, d := range defs {
+			fmt.Fprintf(&b, "• %s (~%d tok)\n", d.Function.Name, toolDefsTokens([]api.ToolDef{d}))
+		}
+		fmt.Fprintf(&b, "\nNavegador: %s · MCP: %s · compact_keep: %d\n",
+			onOff(m.cfg.Tools.Browser), onOff(m.cfg.Tools.MCP), m.cfg.Tools.CompactKeep)
+		if (m.cfg.Tools.Browser || m.cfg.Tools.MCP) && m.mcp == nil {
+			if m.mcpLoading {
+				b.WriteString("MCP aún conectando; las herramientas MCP aparecerán al terminar.\n")
+			} else {
+				b.WriteString("MCP no conectado; usa /mcp import o /mcp on.\n")
+			}
+		}
+		b.WriteString("\n/tools browser on|off · /tools mcp on|off")
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: b.String()})
+		m = m.saveActive()
+		m.layout()
+		return m
+	}
+	if len(args) != 2 || (args[1] != "on" && args[1] != "off") {
+		m.toast, m.toastErr = "Uso: /tools [browser|mcp] on|off", true
+		return m
+	}
+	on := args[1] == "on"
+	switch args[0] {
+	case "browser":
+		m.cfg.Tools.Browser = on
+	case "mcp":
+		m.cfg.Tools.MCP = on
+	default:
+		m.toast, m.toastErr = "Uso: /tools [browser|mcp] on|off", true
+		return m
+	}
+	if on && m.mcp == nil {
+		m.cfg.MCP.Enabled = true
+		if len(m.cfg.MCP.Servers) == 0 {
+			m.toast, m.toastErr = "No hay servidores MCP configurados; usa /mcp import", true
+			return m
+		}
+		if !m.mcpLoading {
+			m.mcpLoading = true
+			debuglog.Logf("mcp connect requested by /tools %s on", args[0])
+		}
+	}
+	m = m.saveCfg()
+	m.toast = fmt.Sprintf("Herramientas %s: %s", args[0], onOff(on))
+	m = m.saveActive()
+	m.layout()
+	return m
+}
+
 func (m Model) toggleAgent() Model {
 	m.cfg.MCP.Enabled = !m.cfg.MCP.Enabled
 	m.saveCfg()
 	if !m.cfg.MCP.Enabled {
 		m.closeMCP()
+	} else if m.mcp == nil && !m.mcpLoading && len(m.cfg.MCP.Servers) > 0 {
+		m.mcpLoading = true
 	}
 	m.toast = "Agente MCP: " + onOff(m.cfg.MCP.Enabled)
 	return m
@@ -827,11 +1083,14 @@ func (m Model) closeMCP() Model {
 }
 
 func (m Model) mcpStatus() string {
-	if !m.cfg.MCP.Enabled {
-		return "MCP off"
+	if m.mcpLoading {
+		return "MCP conectando…"
 	}
-	if m.mcp == nil {
-		return "MCP sin conectar"
+	if len(m.mcpErrs) > 0 && m.mcp == nil {
+		return "MCP error: " + oneLine(m.mcpErrs[0], 60)
 	}
-	return fmt.Sprintf("MCP %d tools", len(m.mcpTools))
+	if m.mcp != nil && (m.cfg.Tools.MCP || m.cfg.Tools.Browser) {
+		return fmt.Sprintf("MCP %d tools", len(m.mcpTools))
+	}
+	return ""
 }

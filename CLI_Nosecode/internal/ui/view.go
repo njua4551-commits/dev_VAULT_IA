@@ -768,6 +768,9 @@ func (m Model) statusLine() uiLine {
 	if name == "vault" {
 		parts = append(parts, m.quotaLabel())
 	}
+	if status := m.mcpStatus(); status != "" {
+		parts = append(parts, mutedStyle.Render(status))
+	}
 	parts = append(parts,
 		keyHint("ctrl+p", "comandos"),
 		dot+" "+mutedStyle.Render(fit(name, 14)),

@@ -26,6 +26,7 @@ var slashEntries = []slashEntry{
 	{"/sessions", "cambiar de sesión", false},
 	{"/copy", "última respuesta · code [n] · files", true},
 	{"/mcp", "servidores MCP: import, tools, on/off", true},
+	{"/tools", "herramientas activas; browser/mcp on|off", true},
 	{"/agent", "activar o desactivar herramientas", false},
 	{"/vault", "importar endpoint del Vault", false},
 	{"/up", "encender la IA en Kaggle", false},
