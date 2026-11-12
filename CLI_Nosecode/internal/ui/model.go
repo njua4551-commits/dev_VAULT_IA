@@ -45,6 +45,8 @@ type agentRun struct {
 	rounds     int
 	steps      int
 	connecting bool
+	paused     bool
+	wrapup     bool
 	ctx        context.Context
 	cancel     context.CancelFunc
 	failures   toolFailureGuard
@@ -886,6 +888,10 @@ func (m Model) placeholder() string {
 }
 
 func (m Model) setMode(mode string) Model {
+	if a := m.run.agent; a != nil && a.paused {
+		// El historial pausado pertenece al modo anterior.
+		m = m.dropAgent()
+	}
 	mode = normalizeMode(mode)
 	m.mode = mode
 	m.cfg.UI.Mode = mode
@@ -1085,6 +1091,7 @@ func (m Model) loadSession(id string) Model {
 	if id == m.activeID {
 		return m
 	}
+	m = m.dropAgent()
 	m = m.saveActive()
 	for _, s := range m.sessions {
 		if s.ID == id {
@@ -1103,6 +1110,7 @@ func (m Model) loadSession(id string) Model {
 }
 
 func (m Model) newSession() Model {
+	m = m.dropAgent()
 	m = m.saveActive()
 	s := session.New()
 	if err := s.Save(); err != nil {

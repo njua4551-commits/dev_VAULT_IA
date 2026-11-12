@@ -17,6 +17,8 @@ const (
 	CurrentVersion       = 2
 	DefaultContextWindow = 131072
 	DefaultCompactKeep   = 6
+	DefaultMaxSteps      = 30
+	MaxStepsLimit        = 100
 )
 
 // ToolSettings controla que herramientas se envían al modelo. Las nativas
@@ -25,6 +27,7 @@ type ToolSettings struct {
 	Browser     bool `json:"browser"`
 	MCP         bool `json:"mcp"`
 	CompactKeep int  `json:"compact_keep"`
+	MaxSteps    int  `json:"max_steps"`
 }
 
 // Provider describe un endpoint compatible con la API de OpenAI.
@@ -126,7 +129,7 @@ func Defaults() *Config {
 			"vault": {Type: "openai"},
 		},
 		Permissions: Permissions{Bash: "ask", Edit: "ask", Webfetch: "ask", MCP: "ask"},
-		Tools:       ToolSettings{CompactKeep: DefaultCompactKeep},
+		Tools:       ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps},
 		MCP:         MCP{Servers: map[string]MCPServer{}},
 		UI: UI{
 			Theme:      "vercel",
@@ -230,6 +233,12 @@ func (c *Config) normalize() {
 	}
 	if c.Tools.CompactKeep <= 0 {
 		c.Tools.CompactKeep = DefaultCompactKeep
+	}
+	if c.Tools.MaxSteps <= 0 {
+		c.Tools.MaxSteps = DefaultMaxSteps
+	}
+	if c.Tools.MaxSteps > MaxStepsLimit {
+		c.Tools.MaxSteps = MaxStepsLimit
 	}
 	if c.MCP.Servers == nil {
 		c.MCP.Servers = map[string]MCPServer{}

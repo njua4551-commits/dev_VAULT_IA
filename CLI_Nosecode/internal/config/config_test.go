@@ -25,6 +25,26 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestMaxStepsDefaultYLimite(t *testing.T) {
+	c := Defaults()
+	if c.Tools.MaxSteps != DefaultMaxSteps {
+		t.Fatalf("max_steps por defecto = %d", c.Tools.MaxSteps)
+	}
+	if DefaultMaxSteps != 30 || MaxStepsLimit != 100 {
+		t.Fatalf("constantes max_steps = %d/%d", DefaultMaxSteps, MaxStepsLimit)
+	}
+	c.Tools.MaxSteps = 0
+	c.normalize()
+	if c.Tools.MaxSteps != DefaultMaxSteps {
+		t.Fatalf("max_steps tras normalizar = %d", c.Tools.MaxSteps)
+	}
+	c.Tools.MaxSteps = MaxStepsLimit + 50
+	c.normalize()
+	if c.Tools.MaxSteps != MaxStepsLimit {
+		t.Fatalf("max_steps sin tope = %d", c.Tools.MaxSteps)
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("NOSECODE_HOME", home)

@@ -37,7 +37,8 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
   se bloquea y responde «herramienta no disponible, no la reintentes»; deja de
   ofrecerse al modelo en los siguientes pasos.
 - Límite de 12 pasos por mensaje del usuario, contando peticiones al modelo y
-  ejecuciones de herramientas.
+  ejecuciones de herramientas (sustituido en 0.5.0 por `tools.max_steps`
+  configurable, con resumen automático y reanudación).
 - Contexto cancelable por turno: `esc` corta el modelo en curso, la aprobación
   pendiente y la herramienta MCP en ejecución.
 - Timeout de herramienta MCP: 60 s por defecto (`timeout` configurable en ms) y
@@ -122,28 +123,42 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 
 ### Hecho el 2026-11-11
 
+- **Nosecode 0.5.0**: el agente ya no muere al llegar a 12 pasos.
+  - `tools.max_steps` configurable (30 por defecto, máximo 100) y
+    `/tools max_steps N`; la barra muestra `paso N/M`.
+  - Al agotar el límite se cierran las herramientas pendientes con resultados
+    sintéticos, se pide un resumen final **sin herramientas** y el agente queda
+    pausado conservando todo el historial (`a.msgs`). «continúa» reinicia solo
+    el contador y reutiliza los resultados, sin repetir la investigación.
+  - Prompt: agrupar llamadas independientes, usar `api.github.com`/`raw` o
+    `git clone --depth 1` en vez del HTML de GitHub y resumir a los ~8 pasos.
+  - `web_fetch` elimina `nav/header/footer/aside/form/svg/noscript/template`.
 - Corregido el contador de GPU: `vault.py quota` emite `QUOTA_*` y Nosecode
   también acepta la línea legible antigua («GPU: usadas X h de Y h»).
   Verificado en vivo: `0.84 h usadas de 30 h, quedan 29.16 h`.
 - El prompt del agente prohíbe expresamente decir que no puede ejecutar
   comandos, leer archivos o capturar la pantalla; debe usar `bash`,
   `read_file` o `screenshot`.
-- Binario 0.4.1 compilado e instalado en Linux (`~/.local/bin/nosecode`).
+- Binario 0.5.0 compilado e instalado en Linux (`~/.local/bin/nosecode`) y
+  generado `dist/nosecode-0.5.0.exe` para Windows.
 - Los commits de los bloques A, B y C están subidos a `origin/main`.
 
 ## Pendiente
 
-- Reinstalar el binario 0.4.1 en Windows y confirmar que el `nosecode` del PATH
-  no es el 0.4.0 antiguo.
+- Reinstalar el binario 0.5.0 en Windows y confirmar que el `nosecode` del PATH
+  no es una versión antigua.
 - Probar en la TUI un comando real del agente (`bash`) y confirmar que Qwen
-  emite `tool_calls` tras la aprobación.
+  emite `tool_calls` tras la aprobación (el túnel de ngrok estaba offline en la
+  última prueba).
+- Probar el resumen automático al límite y «continúa» con el modelo real.
 - Probar `/compact`, el contador de contexto y `screenshot` con la IA encendida.
 - Refrescar `nosecode-public` y repetir el escaneo de secretos.
 - Encender Kaggle con `/up` para la prueba en vivo y apagarlo con `/down` o `F8`.
 
 Tests ya añadidos: selección por caracteres, recorte al panel, limpieza al copiar,
 doble/triple clic, bloques de código, pestañas, herramientas nativas, permisos,
-microcompact, `/compact`, cuota y parseo SSE de `usage`/`tool_calls`.
+microcompact, `/compact`, cuota, parseo SSE de `usage`/`tool_calls`, límite de
+pasos, resumen automático, reanudación con historial y limpieza de HTML.
 
 Estado 2026-11-02: `gofmt`, `go build ./...`, `go vet ./...` y `go test ./...`
 pasan en el proyecto y en la copia pública. Binario 0.4.0 reinstalado en

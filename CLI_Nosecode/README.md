@@ -17,7 +17,7 @@ sesiones locales y navegación con teclado o ratón.
                                     shift+tab agentes   ctrl+p comandos
 ```
 
-## Estado actual (0.4.0)
+## Estado actual (0.5.0)
 
 La interfaz funciona sin ningún endpoint configurado: puedes abrirla, navegar
 los ajustes, crear proveedores y conservar tus conversaciones. No realiza
@@ -133,7 +133,8 @@ cambiar. En la paleta, escribe para filtrar y `enter` para ejecutar.
 ### Comandos
 
 `/settings`, `/model [nombre]`, `/sessions`, `/copy [code [n]|files]`,
-`/tokens`, `/sound`, `/theme`, `/tools [browser|mcp on|off]`, `/compact`,
+`/tokens`, `/sound`, `/theme`, `/tools [browser|mcp] on|off`,
+`/tools max_steps N`, `/compact`,
 `/mcp`, `/agent`, `/vault`, `/up`, `/down`,
 `/urls`, `/status`, `/config`, `/new`, `/help`, `/quit`.
 
@@ -152,6 +153,13 @@ omite por no soportar SSE). Un 401 se muestra como API key incorrecta.
 `/up`, `/down`, `/urls` y `/status` ejecutan `client/vault.py` y muestran su
 salida en vivo. Localiza el script con `VAULT_SCRIPT` (ruta completa), la
 carpeta actual o una copia local de `dev-vault`.
+
+El agente usa las herramientas nativas (`bash`, archivos, `grep`, captura,
+`web_fetch`) y pide permiso según `permissions`. `tools.max_steps` (30 por
+defecto, máximo 100) limita los pasos por turno. Al llegar al límite pide un
+resumen sin herramientas, **conserva todo el historial de herramientas** y
+queda pausado; escribe «continúa» para seguir sin repetir la investigación.
+La barra de estado muestra `paso N/M` y `/tools max_steps N` cambia el límite.
 
 ## Sesiones
 
@@ -189,7 +197,7 @@ Se crea sola en `~/.nosecode/config.json` (o
     }
   },
   "permissions": { "bash": "ask", "edit": "ask", "webfetch": "ask" },
-  "tools": { "browser": false, "mcp": false, "compact_keep": 6 },
+  "tools": { "browser": false, "mcp": false, "compact_keep": 6, "max_steps": 30 },
   "ui": {
     "theme": "vercel",
     "sidebar": true,
@@ -204,7 +212,8 @@ Se crea sola en `~/.nosecode/config.json` (o
   expone `/props` con `n_ctx`, Nosecode usa ese valor al arrancar.
 - `tools.browser` y `tools.mcp` también se cambian con `/tools browser on|off`
   y `/tools mcp on|off`; `compact_keep` es cuántas salidas de herramientas se
-  conservan completas (el resto pasa a `[salida borrada]`).
+  conservan completas (el resto pasa a `[salida borrada]`). `max_steps`
+  (1–100, 30 por defecto) se cambia con `/tools max_steps N`.
 - `VAULT_HOME` cambia la carpeta del Dev Vault.
 - En **Ajustes → Importar del Vault** se copia el endpoint detectado.
 - `mute: false` deja los sonidos activados.

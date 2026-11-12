@@ -175,7 +175,7 @@ func (m Model) onCompactDone(msg compactDoneMsg) (tea.Model, tea.Cmd) {
 	summary = tools.TruncateText(summary, 16<<10)
 	kept := len([]rune(summary))
 	m.msgs = []Message{{Role: "assistant", Text: compactTag + "\n\n" + summary}}
-	m.run.agent = nil
+	m = m.dropAgent()
 	m.usageValid = false
 	m.usageTotal = 0
 	m.ctxWarned = false

@@ -26,6 +26,18 @@ var (
 	reLI      = regexp.MustCompile(`(?i)<li\b[^>]*>`)
 	reBlock   = regexp.MustCompile(`(?i)</?(p|div|br|tr|h[1-6]|section|article|header|footer|main|nav|pre|blockquote|table|ul|ol)\b[^>]*>`)
 	reTag     = regexp.MustCompile(`(?s)<[^>]+>`)
+	// reNoise elimina bloques de navegacion que no aportan contenido util
+	// (menus de GitHub, cabeceras, formularios, iconos SVG...).
+	reNoise = []*regexp.Regexp{
+		regexp.MustCompile(`(?is)<nav\b[^>]*>.*?</nav>`),
+		regexp.MustCompile(`(?is)<header\b[^>]*>.*?</header>`),
+		regexp.MustCompile(`(?is)<footer\b[^>]*>.*?</footer>`),
+		regexp.MustCompile(`(?is)<aside\b[^>]*>.*?</aside>`),
+		regexp.MustCompile(`(?is)<form\b[^>]*>.*?</form>`),
+		regexp.MustCompile(`(?is)<svg\b[^>]*>.*?</svg>`),
+		regexp.MustCompile(`(?is)<noscript\b[^>]*>.*?</noscript>`),
+		regexp.MustCompile(`(?is)<template\b[^>]*>.*?</template>`),
+	}
 )
 
 func runWebFetch(ctx context.Context, raw json.RawMessage) Result {
@@ -95,6 +107,9 @@ func htmlToText(s string) string {
 	s = reScript.ReplaceAllString(s, " ")
 	s = reStyle.ReplaceAllString(s, " ")
 	s = reComment.ReplaceAllString(s, " ")
+	for _, re := range reNoise {
+		s = re.ReplaceAllString(s, " ")
+	}
 	s = reLI.ReplaceAllString(s, "\n- ")
 	s = reBlock.ReplaceAllString(s, "\n")
 	s = reTag.ReplaceAllString(s, " ")

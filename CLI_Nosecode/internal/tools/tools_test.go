@@ -98,7 +98,12 @@ func TestRemember(t *testing.T) {
 func TestWebFetchHTML(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<html><head><style>oculto</style></head><body><h1>Hola</h1><script>malo()</script><p>Mundo &amp; compañía</p></body></html>`))
+		_, _ = w.Write([]byte(`<html><head><style>oculto</style></head><body>` +
+			`<nav>menu-navegacion</nav><header>cabecera-ruido</header>` +
+			`<aside>lateral-ruido</aside><form>formulario-ruido</form>` +
+			`<svg><text>icono-ruido</text></svg><noscript>sin-js-ruido</noscript>` +
+			`<h1>Hola</h1><script>malo()</script><p>Mundo &amp; compañía</p>` +
+			`<footer>pie-ruido</footer></body></html>`))
 	}))
 	defer srv.Close()
 	got := runWebFetch(context.Background(), args(map[string]any{"url": srv.URL}))
@@ -108,6 +113,12 @@ func TestWebFetchHTML(t *testing.T) {
 	if !strings.Contains(got.Text, "Hola") || !strings.Contains(got.Text, "Mundo & compañía") ||
 		strings.Contains(got.Text, "malo") || strings.Contains(got.Text, "oculto") {
 		t.Fatalf("web = %q", got.Text)
+	}
+	for _, noise := range []string{"menu-navegacion", "cabecera-ruido", "lateral-ruido",
+		"formulario-ruido", "icono-ruido", "sin-js-ruido", "pie-ruido"} {
+		if strings.Contains(got.Text, noise) {
+			t.Fatalf("no se limpio %q: %q", noise, got.Text)
+		}
 	}
 }
 

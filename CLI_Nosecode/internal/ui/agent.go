@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,10 +24,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const (
-	toolTag       = "Herramienta · "
-	maxAgentSteps = 12
-)
+const toolTag = "Herramienta · "
+
+func (m Model) maxSteps() int {
+	if n := m.cfg.Tools.MaxSteps; n > 0 {
+		return n
+	}
+	return config.DefaultMaxSteps
+}
 
 // toolFailureGuard corta las llamadas repetidas a una herramienta que falla
 // dos veces seguidas con el mismo error.
@@ -76,8 +81,8 @@ func errorKey(s string) string {
 	return s
 }
 
-func (a *agentRun) beginStep() bool {
-	if a.steps >= maxAgentSteps {
+func (a *agentRun) beginStep(limit int) bool {
+	if limit <= 0 || a.steps >= limit {
 		return false
 	}
 	a.steps++
@@ -95,10 +100,18 @@ const agentSystem = "Eres Nosecode, un agente de terminal con herramientas nativ
 	"3. Antes de editar, lee el archivo y usa edit_file con el texto exacto y único.\n" +
 	"4. Nunca digas que no puedes ejecutar comandos, leer archivos o ver la pantalla: usa " +
 	"bash, read_file o screenshot. Si hace falta permiso, el cliente preguntará al usuario.\n" +
-	"5. No ejecutes comandos destructivos sin explicar qué harás y por qué.\n" +
-	"6. Si modificas el propio Nosecode, haz checkpoint con safe-edit.sh (o safe-edit.ps1), " +
+	"5. Agrupa en una misma respuesta las llamadas independientes (por ejemplo, varios archivos " +
+	"que leer o varios diagnósticos que ejecutar); no hagas una llamada por turno si puedes hacer " +
+	"varias a la vez.\n" +
+	"6. Para GitHub no descargues la página HTML: usa api.github.com, raw.githubusercontent.com, " +
+	"los endpoints de releases o `git clone --depth 1`. Para documentación, busca primero el " +
+	"README o la página raw.\n" +
+	"7. Si llevas unos 8 pasos investigando, resume lo que ya tienes antes de seguir y evita " +
+	"repetir comandos ya ejecutados.\n" +
+	"8. No ejecutes comandos destructivos sin explicar qué harás y por qué.\n" +
+	"9. Si modificas el propio Nosecode, haz checkpoint con safe-edit.sh (o safe-edit.ps1), " +
 	"compila a un binario nuevo en dist y revierte si fallan go build o go test.\n" +
-	"7. Responde en español, breve y claro. No inventes resultados."
+	"10. Responde en español, breve y claro. No inventes resultados."
 
 type mcpReadyMsg struct {
 	manager *mcp.Manager
@@ -118,6 +131,9 @@ func (m Model) useAgent() bool {
 }
 
 func (m Model) startAgent() (Model, tea.Cmd) {
+	if a := m.run.agent; a != nil && a.paused {
+		return m.resumeAgent()
+	}
 	m.run.agent = &agentRun{}
 	nm, cmd := m.beginAgent()
 	if nm.mcpLoading && !nm.mcpInFlight && nm.mcp == nil && len(nm.cfg.MCP.Servers) > 0 {
@@ -125,6 +141,39 @@ func (m Model) startAgent() (Model, tea.Cmd) {
 		return nm, tea.Batch(cmd, connectMCPCmd(nm.cfg.MCP.Servers))
 	}
 	return nm, cmd
+}
+
+// resumeAgent reutiliza el historial completo de herramientas del turno
+// pausado: solo reinicia el contador de pasos y añade el mensaje nuevo.
+func (m Model) resumeAgent() (Model, tea.Cmd) {
+	a := m.run.agent
+	if a == nil {
+		return m.startAgent()
+	}
+	a.paused = false
+	a.wrapup = false
+	a.steps = 0
+	a.pending = nil
+	a.pendingIdx = 0
+	a.calls = nil
+	a.rounds++
+	if a.ctx == nil || a.ctx.Err() != nil {
+		a.ctx, a.cancel = context.WithCancel(context.Background())
+	}
+	if text := lastUserText(m.msgs); text != "" {
+		a.msgs = append(a.msgs, api.ChatMessage{Role: "user", Content: text})
+	}
+	debuglog.Logf("agent resume steps=0 msgs=%d", len(a.msgs))
+	return m.beginAgent()
+}
+
+func lastUserText(msgs []Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return strings.TrimSpace(msgs[i].Text)
+		}
+	}
+	return ""
 }
 
 func connectMCPCmd(servers map[string]config.MCPServer) tea.Cmd {
@@ -192,10 +241,8 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 	if a.ctx == nil {
 		a.ctx, a.cancel = context.WithCancel(context.Background())
 	}
-	if !a.beginStep() {
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: fmt.Sprintf(
-			"⚠ El agente alcanzó el límite de %d pasos por mensaje. Revisa el resultado y continúa con otro mensaje.", maxAgentSteps)})
-		return m.finishAgent(), nil
+	if !a.beginStep(m.maxSteps()) {
+		return m.hitStepLimit(false)
 	}
 	if len(a.msgs) == 0 {
 		history := apiMessages(m.msgs, false)
@@ -356,6 +403,9 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	a := m.run.agent
 	if a == nil || msg.s != a.stream || m.lastIdx() < 0 {
 		return m, nil
+	}
+	if a.wrapup {
+		return m.onWrapChunk(msg)
 	}
 	c := msg.c
 	i := m.lastIdx()
@@ -546,10 +596,8 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		call.ID = fmt.Sprintf("call_%d_%d", a.rounds, a.pendingIdx)
 		a.pending[a.pendingIdx] = call
 	}
-	if !a.beginStep() {
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: fmt.Sprintf(
-			"⚠ El agente alcanzó el límite de %d pasos por mensaje. Revisa el resultado y continúa con otro mensaje.", maxAgentSteps)})
-		return m.finishAgent(), nil
+	if !a.beginStep(m.maxSteps()) {
+		return m.hitStepLimit(true)
 	}
 	if reason, blocked := a.failures.blockedReason(call.Function.Name); blocked {
 		m = m.appendToolResult(call, "herramienta no disponible, no la reintentes: "+reason, nil, true)
@@ -790,6 +838,182 @@ func (m Model) finishAgent() Model {
 	m = m.saveActive()
 	m.layout()
 	return m
+}
+
+// hitStepLimit se activa al agotar tools.max_steps. Primero cierra las
+// herramientas pendientes con resultados sintéticos (la API exige un resultado
+// por cada tool_call) y después pide al modelo un resumen sin herramientas.
+func (m Model) hitStepLimit(skipPending bool) (Model, tea.Cmd) {
+	a := m.run.agent
+	if a == nil {
+		return m, nil
+	}
+	limit := m.maxSteps()
+	if skipPending {
+		m = m.skipPendingTools()
+	}
+	if a.wrapup {
+		return m.pauseAgent(limit), nil
+	}
+	return m.beginWrapUp(limit)
+}
+
+func (m Model) skipPendingTools() Model {
+	a := m.run.agent
+	if a == nil || a.pendingIdx >= len(a.pending) {
+		return m
+	}
+	limit := m.maxSteps()
+	skipped := 0
+	for ; a.pendingIdx < len(a.pending); a.pendingIdx++ {
+		call := a.pending[a.pendingIdx]
+		if call.ID == "" {
+			call.ID = fmt.Sprintf("call_%d_%d", a.rounds, a.pendingIdx)
+		}
+		a.msgs = append(a.msgs, api.ChatMessage{
+			Role: "tool",
+			Content: fmt.Sprintf("No ejecutada: se alcanzó el límite de %d pasos. "+
+				"El resumen la mencionará como pendiente.", limit),
+			ToolCallID: call.ID,
+		})
+		skipped++
+	}
+	a.pending = nil
+	a.pendingIdx = 0
+	if skipped > 0 {
+		debuglog.Logf("step limit skipped_tools=%d", skipped)
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: fmt.Sprintf(
+			"⚠ %d herramienta(s) pendiente(s) no ejecutada(s) por el límite de %d pasos.", skipped, limit)})
+		m.scroll = 0
+		m.layout()
+	}
+	return m
+}
+
+// beginWrapUp pide un resumen final sin herramientas y deja el agente vivo.
+func (m Model) beginWrapUp(limit int) (Model, tea.Cmd) {
+	a := m.run.agent
+	if a == nil {
+		return m, nil
+	}
+	if a.ctx == nil || a.ctx.Err() != nil {
+		a.ctx, a.cancel = context.WithCancel(context.Background())
+	}
+	a.wrapup = true
+	a.pending = nil
+	a.pendingIdx = 0
+	a.calls = nil
+	a.assistant = ""
+	a.msgs = append(a.msgs, api.ChatMessage{
+		Role: "user",
+		Content: fmt.Sprintf("Has alcanzado el límite de %d pasos. No llames más herramientas. "+
+			"Resume en español qué has averiguado, los resultados obtenidos, lo que falta y los "+
+			"siguientes pasos concretos. El usuario podrá escribir «continúa» para seguir.", limit),
+	})
+	microcompact(a.msgs, m.cfg.Tools.CompactKeep)
+	m = m.warnContext()
+	_, p := m.cfg.Active()
+	model := strings.TrimSpace(p.Model)
+	if model == "" {
+		model = "default"
+	}
+	s := api.Stream(a.ctx, api.Request{
+		Bases:       api.Bases(p.BaseURL, config.VaultHome()),
+		APIKey:      p.APIKey,
+		Model:       model,
+		Messages:    a.msgs,
+		IdleTimeout: 120 * time.Second,
+	})
+	a.stream = s
+	debuglog.Logf("model request wrapup step=%d msgs=%d", a.steps, len(a.msgs))
+	m.msgs = append(m.msgs, Message{Role: "assistant", Text: ""})
+	var tick tea.Cmd
+	m, tick = m.startActivity("model", "resumen")
+	m.toast, m.toastErr = fmt.Sprintf("Límite de %d pasos · preparando resumen…", limit), false
+	m.scroll = 0
+	m.layout()
+	return m, tea.Batch(waitChunk(s), tick)
+}
+
+// onWrapChunk recoge el resumen final y pausa el agente conservando a.msgs.
+func (m Model) onWrapChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
+	a := m.run.agent
+	if a == nil || msg.s != a.stream || m.lastIdx() < 0 {
+		return m, nil
+	}
+	c := msg.c
+	i := m.lastIdx()
+	if c.Usage != nil {
+		m.usageTotal = c.Usage.TotalTokens
+		m.usageValid = true
+		m = m.warnContext()
+	}
+	if c.Text != "" {
+		a.assistant += c.Text
+		m.msgs[i].Text += c.Text
+		if m.activity.kind == "model" {
+			m.activity.kind = "stream"
+		}
+		m.scroll = 0
+		m.layout()
+	}
+	if !c.Done {
+		return m, waitChunk(msg.s)
+	}
+	m = m.stopActivity()
+	a.stream = nil
+	summary := strings.TrimSpace(a.assistant)
+	if summary == "" {
+		summary = "No pude generar el resumen."
+		m.msgs[i].Text = summary
+	}
+	a.msgs = append(a.msgs, api.ChatMessage{Role: "assistant", Content: summary})
+	a.assistant = ""
+	a.wrapup = false
+	if c.Err != nil {
+		debuglog.Logf("wrapup error: %s", oneLine(c.Err.Error(), 200))
+		m.msgs[i].Text += "\n\n⚠ " + c.Err.Error()
+	}
+	return m.pauseAgent(m.maxSteps()), nil
+}
+
+// pauseAgent deja el agente en espera sin borrar el historial de herramientas.
+func (m Model) pauseAgent(limit int) Model {
+	a := m.run.agent
+	if a == nil {
+		return m.finishAgent()
+	}
+	a.paused = true
+	a.wrapup = false
+	a.stream = nil
+	a.calls = nil
+	a.pending = nil
+	a.pendingIdx = 0
+	a.assistant = ""
+	m.screen = screenChat
+	m = m.stopActivity()
+	debuglog.Logf("agent paused steps=%d limit=%d msgs=%d", a.steps, limit, len(a.msgs))
+	m.toast, m.toastErr = fmt.Sprintf(
+		"Límite de %d pasos · resumen listo. Escribe «continúa» para seguir", limit), false
+	m.sound(soundDone)
+	m = m.saveActive()
+	m.layout()
+	return m
+}
+
+// dropAgent descarta un agente pausado (cambio de sesión, /compact o salida).
+func (m Model) dropAgent() Model {
+	if a := m.run.agent; a != nil {
+		if a.cancel != nil {
+			a.cancel()
+		}
+		if a.stream != nil {
+			a.stream.Cancel()
+		}
+		debuglog.Logf("agent drop steps=%d", a.steps)
+	}
+	m.run.agent = nil
+	return m.stopActivity()
 }
 
 func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1053,8 +1277,8 @@ func (m Model) toolsSlash(rest string) Model {
 		for _, d := range defs {
 			fmt.Fprintf(&b, "• %s (~%d tok)\n", d.Function.Name, toolDefsTokens([]api.ToolDef{d}))
 		}
-		fmt.Fprintf(&b, "\nNavegador: %s · MCP: %s · compact_keep: %d\n",
-			onOff(m.cfg.Tools.Browser), onOff(m.cfg.Tools.MCP), m.cfg.Tools.CompactKeep)
+		fmt.Fprintf(&b, "\nNavegador: %s · MCP: %s · compact_keep: %d · max_steps: %d\n",
+			onOff(m.cfg.Tools.Browser), onOff(m.cfg.Tools.MCP), m.cfg.Tools.CompactKeep, m.maxSteps())
 		if (m.cfg.Tools.Browser || m.cfg.Tools.MCP) && m.mcp == nil {
 			if m.mcpLoading {
 				b.WriteString("MCP aún conectando; las herramientas MCP aparecerán al terminar.\n")
@@ -1062,14 +1286,25 @@ func (m Model) toolsSlash(rest string) Model {
 				b.WriteString("MCP no conectado; usa /mcp import o /mcp on.\n")
 			}
 		}
-		b.WriteString("\n/tools browser on|off · /tools mcp on|off")
+		b.WriteString("\n/tools browser on|off · /tools mcp on|off · /tools max_steps N")
 		m.msgs = append(m.msgs, Message{Role: "assistant", Text: b.String()})
 		m = m.saveActive()
 		m.layout()
 		return m
 	}
+	if len(args) == 2 && args[0] == "max_steps" {
+		n, err := strconv.Atoi(args[1])
+		if err != nil || n < 1 || n > config.MaxStepsLimit {
+			m.toast, m.toastErr = fmt.Sprintf("Uso: /tools max_steps 1..%d", config.MaxStepsLimit), true
+			return m
+		}
+		m.cfg.Tools.MaxSteps = n
+		m = m.saveCfg()
+		m.toast = fmt.Sprintf("Máximo de pasos: %d", n)
+		return m
+	}
 	if len(args) != 2 || (args[1] != "on" && args[1] != "off") {
-		m.toast, m.toastErr = "Uso: /tools [browser|mcp] on|off", true
+		m.toast, m.toastErr = "Uso: /tools [browser|mcp] on|off · /tools max_steps N", true
 		return m
 	}
 	on := args[1] == "on"

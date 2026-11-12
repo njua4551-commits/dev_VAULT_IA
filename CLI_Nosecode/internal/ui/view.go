@@ -785,6 +785,9 @@ func (m Model) statusLine() uiLine {
 	if m.cfg.UI.Tokens && !m.sidebarVisible() && len(m.msgs) > 0 {
 		parts = append(parts, mutedStyle.Render(m.contextLabel()))
 	}
+	if label := m.agentStepLabel(); label != "" {
+		parts = append(parts, mutedStyle.Render(label))
+	}
 	if name == "vault" {
 		parts = append(parts, m.quotaLabel())
 	}
@@ -816,6 +819,23 @@ func (m Model) statusLine() uiLine {
 
 	content := compose(left, mid, right, m.width-2)
 	return uiLine{text: " " + content + " "}
+}
+
+// agentStepLabel muestra «paso N/M» mientras el agente trabaja o queda pausado.
+func (m Model) agentStepLabel() string {
+	a := m.run.agent
+	if a == nil {
+		return ""
+	}
+	limit := m.maxSteps()
+	switch {
+	case a.paused:
+		return fmt.Sprintf("pausado %d/%d", a.steps, limit)
+	case a.steps > 0:
+		return fmt.Sprintf("paso %d/%d", a.steps, limit)
+	default:
+		return ""
+	}
 }
 
 func (m Model) activityText() string {
