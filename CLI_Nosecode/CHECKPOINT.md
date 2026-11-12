@@ -125,7 +125,7 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 - Probar `/compact`, el contador real y la captura de pantalla en la TUI con la
   IA encendida.
 - Reinstalar el binario en Windows y Linux para usar esta versión.
-- Decidir si se suben los commits `3605b6b`, `21b33e0` y el del Bloque C a `origin/main`.
+- Los commits de los bloques A, B y C ya están subidos a `origin/main` (`7c0ea70`).
 
 ## Pendiente
 
