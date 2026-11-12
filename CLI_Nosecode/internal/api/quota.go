@@ -7,9 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+)
+
+var (
+	// Línea legible que imprime vault.py quota en versiones antiguas:
+	// «GPU: usadas 0.8 h de 30.0 h (reservadas por sesiones activas: 0.0 h)».
+	humanQuota    = regexp.MustCompile(`(?i)GPU:\s*usadas\s+([0-9]+(?:[.,][0-9]+)?)\s*h\s+de\s+([0-9]+(?:[.,][0-9]+)?)\s*h`)
+	humanReserved = regexp.MustCompile(`(?i)reservad[oa]s?[^:]*:\s*([0-9]+(?:[.,][0-9]+)?)\s*h`)
 )
 
 // VaultQuota es la cuota semanal de GPU que reporta Kaggle.
@@ -43,7 +51,8 @@ func RunVaultQuota(parent context.Context, python, script string) (VaultQuota, e
 	return ParseVaultQuota(string(out))
 }
 
-// ParseVaultQuota lee las lineas QUOTA_* que imprime vault.py quota.
+// ParseVaultQuota lee la cuota de `vault.py quota`. Acepta las lineas
+// maquina-legibles QUOTA_* y la linea legible «GPU: usadas X h de Y h».
 func ParseVaultQuota(out string) (VaultQuota, error) {
 	var q VaultQuota
 	var seen bool
@@ -83,7 +92,36 @@ func ParseVaultQuota(out string) (VaultQuota, error) {
 		}
 	}
 	if !seen {
-		return VaultQuota{}, errors.New("vault.py quota no devolvio la cuota de GPU")
+		m := humanQuota.FindStringSubmatch(out)
+		if len(m) != 3 {
+			return VaultQuota{}, errors.New("vault.py quota no devolvio la cuota de GPU")
+		}
+		used, err := parseQuotaFloat(m[1])
+		if err != nil {
+			return VaultQuota{}, err
+		}
+		total, err := parseQuotaFloat(m[2])
+		if err != nil {
+			return VaultQuota{}, err
+		}
+		q.UsedHours, q.TotalHours = used, total
+		if r := humanReserved.FindStringSubmatch(out); len(r) == 2 {
+			q.ReservedHours, _ = parseQuotaFloat(r[1])
+		}
+	}
+	if q.RemainingHours == 0 && q.TotalHours > q.UsedHours {
+		q.RemainingHours = q.TotalHours - q.UsedHours
+	}
+	if q.RemainingHours < 0 {
+		q.RemainingHours = 0
 	}
 	return q, nil
+}
+
+func parseQuotaFloat(s string) (float64, error) {
+	n, err := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(s), ",", "."), 64)
+	if err != nil {
+		return 0, fmt.Errorf("cuota invalida %q", s)
+	}
+	return n, nil
 }

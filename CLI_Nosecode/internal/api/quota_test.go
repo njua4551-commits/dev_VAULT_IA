@@ -23,6 +23,18 @@ func TestParseVaultQuota(t *testing.T) {
 	}
 }
 
+func TestParseVaultQuotaHumano(t *testing.T) {
+	out := "GPU: usadas 0.8 h de 30.0 h (reservadas por sesiones activas: 0.5 h)\n"
+	q, err := ParseVaultQuota(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.UsedHours != 0.8 || q.TotalHours != 30 || q.ReservedHours != 0.5 ||
+		math.Abs(q.RemainingHours-29.2) > 0.001 {
+		t.Fatalf("cuota = %+v", q)
+	}
+}
+
 func TestParseVaultQuotaSinDatos(t *testing.T) {
 	if _, err := ParseVaultQuota("GPU: no disponible\n"); err == nil {
 		t.Fatal("debia fallar sin marcadores QUOTA_*")

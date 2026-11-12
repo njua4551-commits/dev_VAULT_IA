@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"nosecode/internal/api"
+	"nosecode/internal/debuglog"
 )
 
 // quotaRefresh es cada cuanto se vuelve a consultar la cuota de Kaggle.
@@ -63,10 +64,13 @@ func (m Model) onQuota(msg quotaMsg) Model {
 	m.quota.at = time.Now()
 	if msg.err != nil {
 		m.quota.err = true
+		debuglog.Logf("quota error: %s", oneLine(msg.err.Error(), 200))
 		// conserva la ultima cuota valida si la habia
 		return m
 	}
 	m.quota = quotaState{q: msg.q, ok: true, at: time.Now()}
+	debuglog.Logf("quota used=%.2f total=%.2f reserved=%.2f remaining=%.2f",
+		msg.q.UsedHours, msg.q.TotalHours, msg.q.ReservedHours, msg.q.RemainingHours)
 	return m
 }
 

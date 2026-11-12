@@ -120,25 +120,30 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 - `go build ./...`, `go vet ./...`, `go test ./...` y cross-compilación
   `GOOS=linux`/`GOOS=windows` pasan.
 
-### Pendiente de esta actualización
+### Hecho el 2026-11-11
 
-- Probar `/compact`, el contador real y la captura de pantalla en la TUI con la
-  IA encendida.
-- Reinstalar el binario en Windows y Linux para usar esta versión.
-- Los commits de los bloques A, B y C ya están subidos a `origin/main` (`7c0ea70`).
+- Corregido el contador de GPU: `vault.py quota` emite `QUOTA_*` y Nosecode
+  también acepta la línea legible antigua («GPU: usadas X h de Y h»).
+  Verificado en vivo: `0.84 h usadas de 30 h, quedan 29.16 h`.
+- El prompt del agente prohíbe expresamente decir que no puede ejecutar
+  comandos, leer archivos o capturar la pantalla; debe usar `bash`,
+  `read_file` o `screenshot`.
+- Binario 0.4.1 compilado e instalado en Linux (`~/.local/bin/nosecode`).
+- Los commits de los bloques A, B y C están subidos a `origin/main`.
 
 ## Pendiente
 
-0. Binario actualizado con las tareas 1–7 y el indicador de cuota GPU de Kaggle
-   (`GPU 26.8h` en la barra inferior y lateral). Reinicia Nosecode para usar esta
-   versión; la cuota se refresca al arrancar, tras cada comando del Vault y cada 10 min.
-1. Probar en la TUI un mensaje real del agente con aprobación y confirmar que Qwen emite `tool_calls`.
-2. Refrescar `C:\Users\Enoc\Desktop\nosecode-public` y repetir escaneo de secretos.
-3. Encender Kaggle con `/up` para la prueba en vivo y apagarlo después con `/down` o `F8`.
+- Reinstalar el binario 0.4.1 en Windows y confirmar que el `nosecode` del PATH
+  no es el 0.4.0 antiguo.
+- Probar en la TUI un comando real del agente (`bash`) y confirmar que Qwen
+  emite `tool_calls` tras la aprobación.
+- Probar `/compact`, el contador de contexto y `screenshot` con la IA encendida.
+- Refrescar `nosecode-public` y repetir el escaneo de secretos.
+- Encender Kaggle con `/up` para la prueba en vivo y apagarlo con `/down` o `F8`.
 
 Tests ya añadidos: selección por caracteres, recorte al panel, limpieza al copiar,
-doble/triple clic, bloques de código y pestañas. Sigue pendiente cubrir filtrado
-del menú `/`, importación MCP y parseo SSE de `tool_calls`.
+doble/triple clic, bloques de código, pestañas, herramientas nativas, permisos,
+microcompact, `/compact`, cuota y parseo SSE de `usage`/`tool_calls`.
 
 Estado 2026-11-02: `gofmt`, `go build ./...`, `go vet ./...` y `go test ./...`
 pasan en el proyecto y en la copia pública. Binario 0.4.0 reinstalado en

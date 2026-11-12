@@ -543,8 +543,14 @@ def cmd_quota(args):
                 ApiGetAcceleratorQuotaStatisticsRequest())
         g = resp.gpu_quota
         hrs = lambda td: td.total_seconds() / 3600 if td is not None else 0.0
-        say(f"GPU: usadas {hrs(g.time_used):.1f} h de {hrs(g.total_time_allowed):.1f} h "
-            f"(reservadas por sesiones activas: {hrs(g.time_reserved):.1f} h)")
+        used, total, reserved = hrs(g.time_used), hrs(g.total_time_allowed), hrs(g.time_reserved)
+        say(f"GPU: usadas {used:.1f} h de {total:.1f} h "
+            f"(reservadas por sesiones activas: {reserved:.1f} h)")
+        # Lineas que lee el cliente Nosecode para pintar la cuota en la barra.
+        say(f"QUOTA_GPU_USED_H={used:.2f}")
+        say(f"QUOTA_GPU_TOTAL_H={total:.2f}")
+        say(f"QUOTA_GPU_RESERVED_H={reserved:.2f}")
+        say(f"QUOTA_GPU_REMAINING_H={max(0.0, total - used):.2f}")
     except Exception as e:
         say(f"No pude consultar la cuota por API ({str(e)[:120]}). Mirala en kaggle.com/settings (seccion Quotas).")
 
