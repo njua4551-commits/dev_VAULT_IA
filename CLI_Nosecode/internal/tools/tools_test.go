@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -136,7 +137,7 @@ func TestWebFetchHTML(t *testing.T) {
 			`<footer>pie-ruido</footer></body></html>`))
 	}))
 	defer srv.Close()
-	got := runWebFetch(context.Background(), args(map[string]any{"url": srv.URL}))
+	got := runWebFetch(WithWebLocal(context.Background()), args(map[string]any{"url": srv.URL}))
 	if got.Error {
 		t.Fatal(got.Text)
 	}
@@ -148,6 +149,66 @@ func TestWebFetchHTML(t *testing.T) {
 		"formulario-ruido", "icono-ruido", "sin-js-ruido", "pie-ruido"} {
 		if strings.Contains(got.Text, noise) {
 			t.Fatalf("no se limpio %q: %q", noise, got.Text)
+		}
+	}
+}
+
+func TestWebFetchBloqueaDestinosLocales(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("no debería llegar"))
+	}))
+	defer srv.Close()
+	targets := []string{
+		srv.URL,
+		"http://localhost:1/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://[::1]/",
+	}
+	for _, target := range targets {
+		got := runWebFetch(context.Background(), args(map[string]any{"url": target}))
+		if !got.Error || !strings.Contains(got.Text, "bloque") {
+			t.Fatalf("%s no se bloqueó: %+v", target, got)
+		}
+	}
+	got := runWebFetch(WithWebLocal(context.Background()), args(map[string]any{"url": srv.URL}))
+	if got.Error || !strings.Contains(got.Text, "no debería llegar") {
+		t.Fatalf("webfetch_local debería permitir el servidor de prueba: %+v", got)
+	}
+}
+
+func TestWebFetchRedireccionPrivadaBloqueada(t *testing.T) {
+	client := webHTTPClient(context.Background())
+	public, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	private, _ := http.NewRequest(http.MethodGet, "http://192.168.1.10/secreto", nil)
+	err := client.CheckRedirect(private, []*http.Request{public})
+	if err == nil || !strings.Contains(err.Error(), "bloque") {
+		t.Fatalf("redirección privada = %v", err)
+	}
+	via := make([]*http.Request, webMaxRedirects)
+	if err := client.CheckRedirect(private, via); err == nil || !strings.Contains(err.Error(), "redirecciones") {
+		t.Fatalf("límite de redirecciones = %v", err)
+	}
+	open := webHTTPClient(WithWebLocal(context.Background()))
+	if err := open.CheckRedirect(private, []*http.Request{public}); err != nil {
+		t.Fatalf("webfetch_local debería permitir la redirección: %v", err)
+	}
+}
+
+func TestCheckWebIP(t *testing.T) {
+	blocked := []string{
+		"127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255",
+		"192.168.1.1", "169.254.169.254", "0.0.0.0", "100.64.0.1",
+		"255.255.255.255", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1",
+	}
+	for _, raw := range blocked {
+		if err := checkWebIP(net.ParseIP(raw)); err == nil {
+			t.Fatalf("%s debería estar bloqueada", raw)
+		}
+	}
+	allowed := []string{"8.8.8.8", "1.1.1.1", "172.32.0.1", "2606:4700:4700::1111"}
+	for _, raw := range allowed {
+		if err := checkWebIP(net.ParseIP(raw)); err != nil {
+			t.Fatalf("%s debería permitirse: %v", raw, err)
 		}
 	}
 }

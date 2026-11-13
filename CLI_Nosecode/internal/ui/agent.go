@@ -722,6 +722,9 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 	if readRoot != "" {
 		ctx = tools.WithReadRoot(ctx, readRoot)
 	}
+	if m.cfg.Permissions.WebfetchLocal == "allow" {
+		ctx = tools.WithWebLocal(ctx)
+	}
 	mgr := m.mcp
 	servers := m.cfg.MCP.Servers
 	browserTool := isBrowserShort(call.Function.Name)
