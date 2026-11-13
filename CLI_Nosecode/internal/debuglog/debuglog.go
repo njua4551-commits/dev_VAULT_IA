@@ -1,5 +1,6 @@
 // Package debuglog escribe un registro rotativo en ~/.nosecode/debug.log para
-// diagnosticar bloqueos sin guardar claves, argumentos ni contenido del chat.
+// diagnosticar bloqueos. No guarda claves ni contenido del chat; los comandos
+// de bash se registran redactados (tokens y contraseñas ocultos).
 package debuglog
 
 import (

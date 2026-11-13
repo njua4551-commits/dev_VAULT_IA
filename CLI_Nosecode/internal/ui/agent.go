@@ -378,6 +378,30 @@ func (m Model) readDecision(call api.ToolCall) (tools.ReadCheck, tools.ReadDecis
 	return check, decision, true
 }
 
+// bashCommand extrae el comando completo para mostrarlo y registrarlo.
+func bashCommand(call api.ToolCall) (string, bool) {
+	if call.Function.Name != "bash" {
+		return "", false
+	}
+	var a struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal([]byte(call.Function.Arguments), &a) != nil {
+		return "", false
+	}
+	return strings.TrimSpace(a.Command), true
+}
+
+// logBashCalls deja rastro de la aprobación y del comando ejecutado sin
+// guardar credenciales en debug.log.
+func logBashCalls(phase string, calls []api.ToolCall) {
+	for _, call := range calls {
+		if cmd, ok := bashCommand(call); ok {
+			debuglog.Logf("bash %s command=%q", phase, redactSecrets(cmd))
+		}
+	}
+}
+
 func (m Model) mcpToolByShort(name string) (mcp.Tool, bool) {
 	for _, t := range m.mcpTools {
 		if shortTool(t.Wire) == name {
@@ -702,6 +726,8 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		}
 	}
 
+	logBashCalls("exec", []api.ToolCall{call})
+
 	native, isNative := tools.Lookup(call.Function.Name)
 	wire := ""
 	if !isNative {
@@ -903,7 +929,10 @@ func (m Model) onToolDone(msg toolDoneMsg) (tea.Model, tea.Cmd) {
 		a.failures.success(msg.call.Function.Name)
 	}
 	debuglog.Logf("tool done name=%s duration=%s err=%s images=%d",
-		msg.call.Function.Name, msg.duration.Round(time.Millisecond), oneLine(errText, 160), len(parts))
+		msg.call.Function.Name, msg.duration.Round(time.Millisecond), oneLine(redactSecrets(errText), 160), len(parts))
+	if _, isBash := bashCommand(msg.call); isBash {
+		debuglog.Logf("bash done error=%v duration=%s", msg.result.Error, msg.duration.Round(time.Millisecond))
+	}
 	m = m.appendToolResult(msg.call, text, parts, msg.result.Error)
 	a.pendingIdx++
 	return m.executeNextTool()
@@ -1155,12 +1184,14 @@ func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.denyTools()
 	case "enter", "y":
 		m.screen = screenChat
+		logBashCalls("approved-once", m.tool.calls)
 		m = m.authorizeReadCalls(m.tool.calls, false)
 		a.pending = m.tool.calls
 		a.pendingIdx = 0
 		return m.executeNextTool()
 	case "a":
 		m.screen = screenChat
+		logBashCalls("approved-session", m.tool.calls)
 		if m.allowTools == nil {
 			m.allowTools = map[string]bool{}
 		}
@@ -1183,6 +1214,7 @@ func (m Model) denyTools() (Model, tea.Cmd) {
 	if a == nil {
 		return m, nil
 	}
+	logBashCalls("denied", m.tool.calls)
 	for _, call := range m.tool.calls {
 		if call.ID == "" {
 			call.ID = fmt.Sprintf("call_deny_%d", len(a.msgs))
@@ -1227,11 +1259,18 @@ func (m Model) toolScreen() []uiLine {
 		{text: faintStyle.Render("Origen     ") + textStyle.Render(server)},
 		{text: faintStyle.Render("Herramienta ") + titleStyle.Render(tool)},
 		{},
-		{text: faintStyle.Render("Argumentos")},
 	}
-	args := prettyArgs(call.Function.Arguments)
-	for _, ln := range wrapText(args, innerW-2) {
-		body = append(body, uiLine{text: textStyle.Render(" " + ln)})
+	if cmd, isBash := bashCommand(call); isBash {
+		body = append(body, uiLine{text: faintStyle.Render("Comando")})
+		for _, ln := range wrapText(cmd, innerW-2) {
+			body = append(body, uiLine{text: textStyle.Render(" " + ln)})
+		}
+	} else {
+		body = append(body, uiLine{text: faintStyle.Render("Argumentos")})
+		args := prettyArgs(call.Function.Arguments)
+		for _, ln := range wrapText(args, innerW-2) {
+			body = append(body, uiLine{text: textStyle.Render(" " + ln)})
+		}
 	}
 	if check, isRead := m.readCheckFor(call); isRead && (check.Sensitive || check.Outside) {
 		label := "Fuera del proyecto: "
