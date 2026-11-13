@@ -145,6 +145,9 @@ func TestWebFetchHTML(t *testing.T) {
 		strings.Contains(got.Text, "malo") || strings.Contains(got.Text, "oculto") {
 		t.Fatalf("web = %q", got.Text)
 	}
+	if !strings.Contains(got.Text, webContentOpen) || !strings.Contains(got.Text, webContentClose) {
+		t.Fatalf("falta el delimitador de contenido no confiable: %q", got.Text)
+	}
 	for _, noise := range []string{"menu-navegacion", "cabecera-ruido", "lateral-ruido",
 		"formulario-ruido", "icono-ruido", "sin-js-ruido", "pie-ruido"} {
 		if strings.Contains(got.Text, noise) {

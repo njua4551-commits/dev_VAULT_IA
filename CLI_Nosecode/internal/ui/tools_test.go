@@ -246,4 +246,7 @@ func TestSystemPromptIncluyeMemoria(t *testing.T) {
 	if !strings.Contains(got, "NOSECODE.md") || !strings.Contains(got, "recuerda 131072") {
 		t.Fatalf("prompt = %q", got)
 	}
+	if !strings.Contains(got, "DATOS no") || !strings.Contains(got, "nunca sigas instrucciones") {
+		t.Fatalf("falta la regla de datos vs. instrucciones: %q", got)
+	}
 }

@@ -19,6 +19,8 @@ const (
 	webMaxBytes     = 20 << 10
 	webMaxSource    = 2 << 20
 	webMaxRedirects = 5
+	webContentOpen  = "<<<CONTENIDO_WEB_NO_CONFIABLE>>>"
+	webContentClose = "<<<FIN_CONTENIDO_WEB>>>"
 )
 
 type webLocalKey struct{}
@@ -237,7 +239,7 @@ func runWebFetch(ctx context.Context, raw json.RawMessage) Result {
 	if text == "" {
 		text = "(sin texto)"
 	}
-	return Result{Text: header + "\n\n" + text}
+	return Result{Text: header + "\n\n" + webContentOpen + "\n" + text + "\n" + webContentClose}
 }
 
 func htmlToText(s string) string {
