@@ -9,12 +9,18 @@ Guía breve para agentes que trabajen en este repositorio.
   nativas: `bash`, archivos, `grep`, captura de pantalla, `web_fetch` y memoria.
 - `dev-vault/`: scripts Python del Vault (Kaggle, túneles y `vault.py`).
 
-## Estado actual (2026-11-11)
+## Estado actual (2026-11-12)
 
-- Nosecode 0.5.0 compila y pasa `go build ./...`, `go vet ./...` y `go test ./...`
+- Nosecode 0.6.0 compila y pasa `go build ./...`, `go vet ./...` y `go test ./...`
   en Linux, y cross-compila para Windows.
 - Herramientas nativas activas por defecto; MCP y navegador solo con
   `/tools mcp on` y `/tools browser on`.
+- Seguridad de herramientas: `permissions.read` (ask por defecto) protege
+  rutas fuera del proyecto y bloquea `~/.ssh`, `~/.gnupg`, credenciales cloud,
+  `.env`, `*.pem` y `*.key`; `permissions.webfetch_local` (deny por defecto)
+  corta SSRF a loopback, rangos privados y metadatos en cada conexión y
+  redirección. El contenido descargado se trata como datos no confiables.
+  `bash` muestra el comando completo y `debug.log` lo guarda redactado.
 - Agente con límite configurable `tools.max_steps` (30 por defecto, máximo 100):
   al agotarlo pide un resumen sin herramientas, conserva `a.msgs` completo y
   queda pausado. «continúa» reanuda sin repetir la investigación. La barra
@@ -29,14 +35,14 @@ Guía breve para agentes que trabajen en este repositorio.
 
 ## Pendiente
 
-- Reinstalar el binario 0.5.0 en Windows (`install.ps1`) y confirmar que el
+- Reinstalar el binario 0.6.0 en Windows (`install.ps1`) y confirmar que el
   `nosecode` del PATH no es una versión antigua.
 - Probar en la TUI un comando real del agente (`bash`) y confirmar que Qwen
   emite `tool_calls` y que se ejecuta tras la aprobación (el túnel de ngrok
   estaba offline en la última prueba).
 - Probar `/compact`, el contador de contexto y `screenshot` con la IA encendida.
 - Refrescar la copia pública `nosecode-public` y repetir el escaneo de secretos.
-- Investigar WordCraft con Nosecode 0.5.0 y confirmar que el resumen automático
+- Investigar WordCraft con Nosecode 0.6.0 y confirmar que el resumen automático
   al llegar al límite funciona con el modelo real.
 
 ## Reglas para agentes
@@ -50,3 +56,7 @@ Guía breve para agentes que trabajen en este repositorio.
   completo de herramientas es lo que permite continuar sin repetir trabajo.
 - Antes de dar algo por terminado: `gofmt -w internal`, `go build ./...`,
   `go vet ./...` y `go test ./...`.
+- No debilites las políticas de lectura ni el filtro SSRF de `web_fetch`:
+  las rutas sensibles siempre piden aprobación y los destinos locales solo se
+  permiten con `permissions.webfetch_local = "allow"`.
+- No registres en `debug.log` comandos sin pasar por `redactSecrets`.

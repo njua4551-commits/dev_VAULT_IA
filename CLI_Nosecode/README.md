@@ -17,7 +17,7 @@ sesiones locales y navegación con teclado o ratón.
                                     shift+tab agentes   ctrl+p comandos
 ```
 
-## Estado actual (0.5.0)
+## Estado actual (0.6.0)
 
 La interfaz funciona sin ningún endpoint configurado: puedes abrirla, navegar
 los ajustes, crear proveedores y conservar tus conversaciones. No realiza
@@ -161,6 +161,28 @@ resumen sin herramientas, **conserva todo el historial de herramientas** y
 queda pausado; escribe «continúa» para seguir sin repetir la investigación.
 La barra de estado muestra `paso N/M` y `/tools max_steps N` cambia el límite.
 
+### Seguridad de las herramientas
+
+- `permissions.read` (`ask` por defecto) controla las lecturas fuera del
+  directorio del proyecto. Las rutas sensibles siempre piden aprobación
+  aunque el permiso sea `allow`: `~/.dev-vault/`, `~/.nosecode/config.json`,
+  `~/.ssh/`, `~/.gnupg/`, `~/.kaggle/`, `~/.aws/`, `~/.git-credentials`,
+  `%APPDATA%\gcloud`, `~/.config/gcloud`, `.env`, `.env.*`, `*.pem` y `*.key`.
+  La ruta se normaliza con `filepath.Abs` + `EvalSymlinks` antes de decidir.
+  «Permitir en esta sesión» recuerda solo esa ruta exacta; al cambiar de
+  sesión se olvida. En una ruta sensible, esa opción autoriza solo la
+  ejecución actual.
+- `permissions.webfetch_local` (`deny` por defecto) impide que `web_fetch`
+  alcance localhost, loopback, rangos privados, link-local, metadatos de nube
+  y nombres que resuelvan a esas direcciones. La comprobación se hace al
+  conectar y en cada redirección (máximo 5), no solo al validar la URL.
+- El contenido de webs y archivos es **contenido no confiable**: el prompt
+  prohíbe seguir instrucciones embebidas y `web_fetch` lo delimita entre
+  `<<<CONTENIDO_WEB_NO_CONFIABLE>>>` y `<<<FIN_CONTENIDO_WEB>>>`.
+- La confirmación de `bash` muestra el comando completo. `debug.log` registra
+  si se aprobó, denegó o ejecutó, con tokens, contraseñas y credenciales de
+  URL redactados.
+
 ## Sesiones
 
 Cada conversación se guarda en `~/.nosecode/sessions/<id>.json` con permisos
@@ -196,7 +218,14 @@ Se crea sola en `~/.nosecode/config.json` (o
       "context_window": 131072
     }
   },
-  "permissions": { "bash": "ask", "edit": "ask", "webfetch": "ask" },
+  "permissions": {
+    "bash": "ask",
+    "edit": "ask",
+    "read": "ask",
+    "webfetch": "ask",
+    "webfetch_local": "deny",
+    "mcp": "ask"
+  },
   "tools": { "browser": false, "mcp": false, "compact_keep": 6, "max_steps": 30 },
   "ui": {
     "theme": "vercel",
@@ -210,6 +239,10 @@ Se crea sola en `~/.nosecode/config.json` (o
 
 - `context_window` es el valor de reserva (131072 por defecto). Si el servidor
   expone `/props` con `n_ctx`, Nosecode usa ese valor al arrancar.
+- `permissions.read` acepta `ask`, `allow` o `deny` para rutas fuera del
+  proyecto; las sensibles siempre piden aprobación salvo `deny`.
+  `permissions.webfetch_local` solo acepta `allow` o `deny`. Ambos se cambian
+  en **Ajustes → Permisos**.
 - `tools.browser` y `tools.mcp` también se cambian con `/tools browser on|off`
   y `/tools mcp on|off`; `compact_keep` es cuántas salidas de herramientas se
   conservan completas (el resto pasa a `[salida borrada]`). `max_steps`

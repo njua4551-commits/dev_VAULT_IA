@@ -3,6 +3,29 @@
 Estado guardado en disco. El código compila, pasa `go vet` y `go test ./...`.
 Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 
+## Seguridad de herramientas 0.6.0 — 2026-11-12
+
+- Punto 1: `permissions.read` (`ask` por defecto) y rutas sensibles canónicas
+  (`filepath.Abs` + `EvalSymlinks`): `~/.dev-vault/`, `~/.nosecode/config.json`,
+  `~/.ssh/`, `~/.gnupg/`, `~/.kaggle/`, `~/.aws/`, `~/.git-credentials`,
+  gcloud, `.env`/`.env.*`, `*.pem` y `*.key`. Autorización por sesión y ruta
+  exacta; las sensibles siempre se confirman. `grep` omite archivos sensibles
+  salvo que la raíz aprobada sea sensible.
+- Punto 2: `web_fetch` bloquea loopback, RFC1918, link-local, ULA, metadatos
+  y nombres que resuelvan a esas IP. La IP se valida en `DialContext` y en cada
+  redirección (máximo 5). `permissions.webfetch_local = "deny"` por defecto.
+- Punto 3: webs y archivos son datos no confiables; regla en el prompt y
+  delimitadores `<<<CONTENIDO_WEB_NO_CONFIABLE>>>` / `<<<FIN_CONTENIDO_WEB>>>`.
+- Punto 4: el modal de `bash` muestra el comando completo; `debug.log` guarda
+  aprobación/denegación/ejecución con secretos redactados.
+- Punto 5: tests de `..`, symlink a `~/.ssh`, `.env`, loopback,
+  169.254.169.254, redirección pública→privada, rangos IP y rutas normales.
+- Verificación: `gofmt`, `go build ./...`, `go vet ./...`, `go test ./...` y
+  `GOOS=windows GOARCH=amd64 go build` pasan.
+- Binario 0.6.0 instalado en Linux (`~/.local/bin/nosecode`) y generado
+  `dist/nosecode-0.6.0.exe` para Windows.
+- Commits: `6f6bb48`, `a52995e`, `007f47b`, `04076b9` (y el de docs/versión).
+
 ## Hecho
 
 - Rediseño visual 0.4.0 (tema Vercel, sidebar derecha y pestañas de sesión).
@@ -145,7 +168,7 @@ Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 
 ## Pendiente
 
-- Reinstalar el binario 0.5.0 en Windows y confirmar que el `nosecode` del PATH
+- Reinstalar el binario 0.6.0 en Windows y confirmar que el `nosecode` del PATH
   no es una versión antigua.
 - Probar en la TUI un comando real del agente (`bash`) y confirmar que Qwen
   emite `tool_calls` tras la aprobación (el túnel de ngrok estaba offline en la

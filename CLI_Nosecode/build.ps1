@@ -9,7 +9,7 @@ try {
     Write-Host "Nosecode: compilando..."
     New-Item -ItemType Directory -Force -Path (Join-Path $root "dist") | Out-Null
 
-    $ldflags = "-s -w -X nosecode/internal/version.Version=0.4.0 -X nosecode/internal/version.Commit=build"
+    $ldflags = "-s -w -X nosecode/internal/version.Version=0.6.0 -X nosecode/internal/version.Commit=build"
 
     & $go build -trimpath -ldflags $ldflags -o "dist\nosecode.exe" ./cmd/nosecode
     if ($LASTEXITCODE -ne 0) { throw "fallo el build de Windows" }
