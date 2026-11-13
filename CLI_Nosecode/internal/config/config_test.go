@@ -20,8 +20,36 @@ func TestDefaults(t *testing.T) {
 	if c.Permissions.Bash != "ask" {
 		t.Fatalf("bash = %q", c.Permissions.Bash)
 	}
+	if c.Permissions.Read != "ask" {
+		t.Fatalf("read = %q", c.Permissions.Read)
+	}
+	if c.Permissions.WebfetchLocal != "deny" {
+		t.Fatalf("webfetch_local = %q", c.Permissions.WebfetchLocal)
+	}
 	if !c.UI.Tokens {
 		t.Fatal("el contador de tokens debe venir activo")
+	}
+}
+
+func TestNormalizaPermisosNuevos(t *testing.T) {
+	c := Defaults()
+	c.Permissions.Read = "DENY"
+	c.Permissions.WebfetchLocal = "ALLOW"
+	c.normalize()
+	if c.Permissions.Read != "deny" {
+		t.Fatalf("read = %q", c.Permissions.Read)
+	}
+	if c.Permissions.WebfetchLocal != "allow" {
+		t.Fatalf("webfetch_local = %q", c.Permissions.WebfetchLocal)
+	}
+	c.Permissions.Read = "otra cosa"
+	c.Permissions.WebfetchLocal = "otra cosa"
+	c.normalize()
+	if c.Permissions.Read != "ask" {
+		t.Fatalf("read inválido = %q", c.Permissions.Read)
+	}
+	if c.Permissions.WebfetchLocal != "deny" {
+		t.Fatalf("webfetch_local inválido = %q", c.Permissions.WebfetchLocal)
 	}
 }
 

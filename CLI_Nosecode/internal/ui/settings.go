@@ -112,7 +112,9 @@ func (m Model) settingRows() []settingRow {
 	header("Permisos")
 	row("perm", "Bash", m.cfg.Permissions.Bash, "bash")
 	row("perm", "Edición", m.cfg.Permissions.Edit, "edit")
+	row("perm", "Lectura", m.cfg.Permissions.Read, "read")
 	row("perm", "Web fetch", m.cfg.Permissions.Webfetch, "web")
+	row("perm", "Web local", m.cfg.Permissions.WebfetchLocal, "weblocal")
 	row("perm", "Herramientas MCP", m.cfg.Permissions.MCP, "mcp")
 
 	header("Sistema")

@@ -42,10 +42,12 @@ type Provider struct {
 // Permissions define que puede hacer el agente sin preguntar.
 // Valores: "ask", "allow", "deny".
 type Permissions struct {
-	Bash     string `json:"bash"`
-	Edit     string `json:"edit"`
-	Webfetch string `json:"webfetch"`
-	MCP      string `json:"mcp"`
+	Bash          string `json:"bash"`
+	Edit          string `json:"edit"`
+	Webfetch      string `json:"webfetch"`
+	WebfetchLocal string `json:"webfetch_local"`
+	Read          string `json:"read"`
+	MCP           string `json:"mcp"`
 }
 
 // MCPServer describe un servidor MCP local (stdio) o remoto (HTTP).
@@ -128,9 +130,16 @@ func Defaults() *Config {
 		Providers: map[string]Provider{
 			"vault": {Type: "openai"},
 		},
-		Permissions: Permissions{Bash: "ask", Edit: "ask", Webfetch: "ask", MCP: "ask"},
-		Tools:       ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps},
-		MCP:         MCP{Servers: map[string]MCPServer{}},
+		Permissions: Permissions{
+			Bash:          "ask",
+			Edit:          "ask",
+			Webfetch:      "ask",
+			WebfetchLocal: "deny",
+			Read:          "ask",
+			MCP:           "ask",
+		},
+		Tools: ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps},
+		MCP:   MCP{Servers: map[string]MCPServer{}},
 		UI: UI{
 			Theme:      "vercel",
 			Sidebar:    true,
@@ -230,6 +239,17 @@ func (c *Config) normalize() {
 	}
 	if c.Permissions.MCP == "" {
 		c.Permissions.MCP = "ask"
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Permissions.Read)) {
+	case "allow", "deny":
+		c.Permissions.Read = strings.ToLower(strings.TrimSpace(c.Permissions.Read))
+	default:
+		c.Permissions.Read = "ask"
+	}
+	if strings.ToLower(strings.TrimSpace(c.Permissions.WebfetchLocal)) != "allow" {
+		c.Permissions.WebfetchLocal = "deny"
+	} else {
+		c.Permissions.WebfetchLocal = "allow"
 	}
 	if c.Tools.CompactKeep <= 0 {
 		c.Tools.CompactKeep = DefaultCompactKeep

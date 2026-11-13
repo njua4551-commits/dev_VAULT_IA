@@ -67,6 +67,36 @@ func TestListDirAndGrep(t *testing.T) {
 	}
 }
 
+func TestGrepOmiteSensibles(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("TOKEN visible\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("TOKEN secreto\n"), 0o600)
+	g := runGrep(context.Background(), args(map[string]any{"pattern": "TOKEN", "path": dir}))
+	if g.Error || !strings.Contains(g.Text, "a.txt") || strings.Contains(g.Text, ".env") {
+		t.Fatalf("grep incluyó un archivo sensible: %q", g.Text)
+	}
+	ctx := WithReadRoot(context.Background(), dir)
+	g = runGrep(ctx, args(map[string]any{"pattern": "TOKEN", "path": dir}))
+	if g.Error || strings.Contains(g.Text, ".env") {
+		t.Fatalf("una raíz normal no debe habilitar .env: %q", g.Text)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(ssh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ssh, "config"), []byte("Host nosecode\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx = WithReadRoot(context.Background(), ssh)
+	g = runGrep(ctx, args(map[string]any{"pattern": "Host", "path": ssh}))
+	if g.Error || !strings.Contains(g.Text, "Host nosecode") {
+		t.Fatalf("la raíz sensible aprobada debería leerse: %q", g.Text)
+	}
+}
+
 func TestBashRun(t *testing.T) {
 	got := runBash(context.Background(), args(map[string]any{"command": "echo nosecode"}))
 	if got.Error || !strings.Contains(got.Text, "nosecode") {

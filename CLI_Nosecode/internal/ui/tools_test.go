@@ -3,12 +3,14 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"nosecode/internal/api"
 	"nosecode/internal/config"
 	"nosecode/internal/mcp"
+	"nosecode/internal/tools"
 )
 
 func defNames(defs []api.ToolDef) []string {
@@ -138,6 +140,80 @@ func TestAllowToolsPersisteEntreTurnos(t *testing.T) {
 	m.run.agent = &agentRun{}
 	if m.callsNeedApproval(calls) {
 		t.Fatal("el permiso debe vivir en el Model, no en el turno")
+	}
+}
+
+func readCall(path string) api.ToolCall {
+	var c api.ToolCall
+	c.Function.Name = "read_file"
+	c.Function.Arguments = `{"path":` + strconv.Quote(path) + `}`
+	return c
+}
+
+func TestReadPolicyRutas(t *testing.T) {
+	m := newTestModel(t)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	normal := readCall(filepath.Join(cwd, "nota.txt"))
+	outsidePath := filepath.Join(filepath.Dir(cwd), "otro.txt")
+	outside := readCall(outsidePath)
+	sensitive := readCall(filepath.Join(cwd, ".env"))
+
+	m.cfg.Permissions.Read = "ask"
+	if m.callsNeedApproval([]api.ToolCall{normal}) {
+		t.Fatal("una ruta normal del proyecto no debe pedir permiso")
+	}
+	if !m.callsNeedApproval([]api.ToolCall{outside}) {
+		t.Fatal("una ruta fuera del proyecto debe pedir permiso")
+	}
+	if !m.callsNeedApproval([]api.ToolCall{sensitive}) {
+		t.Fatal(".env debe pedir permiso aunque esté dentro del proyecto")
+	}
+
+	check, _ := m.readCheckFor(outside)
+	m.readOnce = map[string]bool{check.Path: true}
+	if m.callsNeedApproval([]api.ToolCall{outside}) {
+		t.Fatal("la ruta aprobada una vez no debe volver a pedir permiso")
+	}
+	m.readAllowed = map[string]bool{check.Path: true}
+	m.readOnce = nil
+	if m.callsNeedApproval([]api.ToolCall{outside}) {
+		t.Fatal("la ruta aprobada en la sesión no debe volver a pedir permiso")
+	}
+	other := readCall(filepath.Join(filepath.Dir(cwd), "distinto.txt"))
+	if !m.callsNeedApproval([]api.ToolCall{other}) {
+		t.Fatal("la autorización debe ser por ruta exacta")
+	}
+
+	m.cfg.Permissions.Read = "allow"
+	if m.callsNeedApproval([]api.ToolCall{outside}) {
+		t.Fatal("read=allow debe autoaprobar rutas no sensibles")
+	}
+	if !m.callsNeedApproval([]api.ToolCall{sensitive}) {
+		t.Fatal("read=allow no debe autoaprobar rutas sensibles")
+	}
+	sc, _ := m.readCheckFor(sensitive)
+	m.readAllowed = map[string]bool{sc.Path: true}
+	if !m.callsNeedApproval([]api.ToolCall{sensitive}) {
+		t.Fatal("readAllowed no debe recordar rutas sensibles")
+	}
+	m.readOnce = map[string]bool{sc.Path: true}
+	if _, decision, _ := m.readDecision(sensitive); decision != tools.ReadAllow {
+		t.Fatalf("la autorización puntual debe permitir la lectura, got %q", decision)
+	}
+
+	m.cfg.Permissions.Read = "deny"
+	m.readOnce = nil
+	if m.callsNeedApproval([]api.ToolCall{outside}) || m.callsNeedApproval([]api.ToolCall{sensitive}) {
+		t.Fatal("deny no debe abrir el modal")
+	}
+	if _, decision, _ := m.readDecision(outside); decision != tools.ReadDeny {
+		t.Fatalf("decisión fuera = %q", decision)
+	}
+	if _, decision, _ := m.readDecision(normal); decision != tools.ReadAllow {
+		t.Fatalf("decisión normal = %q", decision)
 	}
 }
 

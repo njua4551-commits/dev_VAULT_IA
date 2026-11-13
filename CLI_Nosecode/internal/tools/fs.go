@@ -247,6 +247,13 @@ func runGrep(ctx context.Context, raw json.RawMessage) Result {
 	if !rootInfo.IsDir() {
 		rootDir = filepath.Dir(path)
 	}
+	allowedRoot := readRootFrom(ctx)
+	allowSensitive := func(file string) bool {
+		if allowedRoot == "" || !IsSensitivePath(allowedRoot) {
+			return false
+		}
+		return containsPath(allowedRoot, canonicalPath(file))
+	}
 
 	var (
 		b         strings.Builder
@@ -270,6 +277,9 @@ func runGrep(ctx context.Context, raw json.RawMessage) Result {
 	}
 
 	checkFile := func(file string, d fs.DirEntry) error {
+		if sensitive, _ := SensitiveName(d.Name()); sensitive && !allowSensitive(file) {
+			return nil
+		}
 		if a.Glob != "" {
 			ok, _ := filepath.Match(a.Glob, d.Name())
 			if !ok {
@@ -330,6 +340,9 @@ func runGrep(ctx context.Context, raw json.RawMessage) Result {
 			}
 			if d.IsDir() {
 				if file != rootDir && skipDir(d.Name()) {
+					return filepath.SkipDir
+				}
+				if file != rootDir && !allowSensitive(file) && IsSensitivePath(file) {
 					return filepath.SkipDir
 				}
 				return nil

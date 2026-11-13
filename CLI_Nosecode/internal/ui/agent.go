@@ -305,6 +305,77 @@ func (m Model) nativeToolAllowed(name string) bool {
 	}
 }
 
+var readToolNames = map[string]bool{
+	"read_file":  true,
+	"list_dir":   true,
+	"grep":       true,
+	"view_image": true,
+}
+
+// readToolPath extrae la ruta de las herramientas que leen del disco.
+func readToolPath(call api.ToolCall) (string, bool) {
+	if !readToolNames[call.Function.Name] {
+		return "", false
+	}
+	var a struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal([]byte(call.Function.Arguments), &a) != nil || strings.TrimSpace(a.Path) == "" {
+		return ".", true
+	}
+	return a.Path, true
+}
+
+func (m Model) readCheckFor(call api.ToolCall) (tools.ReadCheck, bool) {
+	raw, ok := readToolPath(call)
+	if !ok {
+		return tools.ReadCheck{}, false
+	}
+	cwd, _ := os.Getwd()
+	return tools.CheckReadPath(raw, cwd), true
+}
+
+// readAllowedPath indica si el usuario ya autorizó esa ruta exacta en la
+// sesión actual. Las rutas sensibles nunca se autoaprueban.
+func (m Model) readAllowedPath(check tools.ReadCheck) bool {
+	if check.Sensitive {
+		return false
+	}
+	return m.readOnce[check.Path] || m.readAllowed[check.Path]
+}
+
+func (m Model) readNeedsApproval(call api.ToolCall) bool {
+	check, ok := m.readCheckFor(call)
+	if !ok {
+		return false
+	}
+	if tools.EvaluateRead(check, m.cfg.Permissions.Read) != tools.ReadAsk {
+		return false
+	}
+	if check.Sensitive {
+		return true
+	}
+	return !m.readAllowedPath(check)
+}
+
+// readDecision combina el permiso configurado con las autorizaciones dadas
+// para esta sesión.
+func (m Model) readDecision(call api.ToolCall) (tools.ReadCheck, tools.ReadDecision, bool) {
+	check, ok := m.readCheckFor(call)
+	if !ok {
+		return tools.ReadCheck{}, tools.ReadAllow, false
+	}
+	decision := tools.EvaluateRead(check, m.cfg.Permissions.Read)
+	if decision == tools.ReadAsk {
+		if m.readOnce[check.Path] {
+			decision = tools.ReadAllow
+		} else if !check.Sensitive && m.readAllowed[check.Path] {
+			decision = tools.ReadAllow
+		}
+	}
+	return check, decision, true
+}
+
 func (m Model) mcpToolByShort(name string) (mcp.Tool, bool) {
 	for _, t := range m.mcpTools {
 		if shortTool(t.Wire) == name {
@@ -473,7 +544,7 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(assistantText) == "" {
 		m.msgs[i].Text = "⚙ " + toolNames(calls)
 	}
-	calls = approvalFirst(calls)
+	calls = m.approvalFirst(calls)
 	if !m.callsNeedApproval(calls) {
 		a.pending = calls
 		a.pendingIdx = 0
@@ -521,15 +592,18 @@ func (m Model) callsNeedApproval(calls []api.ToolCall) bool {
 				return true
 			}
 		}
+		if m.readNeedsApproval(c) {
+			return true
+		}
 	}
 	return false
 }
 
-func approvalFirst(calls []api.ToolCall) []api.ToolCall {
+func (m Model) approvalFirst(calls []api.ToolCall) []api.ToolCall {
 	sensitive := make([]api.ToolCall, 0, len(calls))
 	rest := make([]api.ToolCall, 0, len(calls))
 	for _, c := range calls {
-		if _, ok := approvalCategory(c.Function.Name); ok {
+		if _, ok := approvalCategory(c.Function.Name); ok || m.readNeedsApproval(c) {
 			sensitive = append(sensitive, c)
 		} else {
 			rest = append(rest, c)
@@ -605,6 +679,27 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		return m.executeNextTool()
 	}
 
+	readRoot := ""
+	if check, decision, ok := m.readDecision(call); ok {
+		switch decision {
+		case tools.ReadDeny:
+			debuglog.Logf("read deny path=%s", check.Path)
+			m = m.appendToolResult(call, tools.ReadDeniedMessage(check), nil, true)
+			a.pendingIdx++
+			return m.executeNextTool()
+		case tools.ReadAsk:
+			m.tool = toolConfirmState{calls: []api.ToolCall{call}}
+			m.screen = screenTool
+			return m, nil
+		}
+		if m.readOnce != nil {
+			delete(m.readOnce, check.Path)
+		}
+		if check.Sensitive {
+			readRoot = check.Path
+		}
+	}
+
 	native, isNative := tools.Lookup(call.Function.Name)
 	wire := ""
 	if !isNative {
@@ -623,6 +718,9 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if readRoot != "" {
+		ctx = tools.WithReadRoot(ctx, readRoot)
 	}
 	mgr := m.mcp
 	servers := m.cfg.MCP.Servers
@@ -1016,6 +1114,29 @@ func (m Model) dropAgent() Model {
 	return m.stopActivity()
 }
 
+// authorizeReadCalls guarda la autorización por ruta exacta. Las rutas
+// sensibles nunca se recuerdan para toda la sesión: «a» autoriza solo esta vez.
+func (m Model) authorizeReadCalls(calls []api.ToolCall, session bool) Model {
+	for _, call := range calls {
+		check, ok := m.readCheckFor(call)
+		if !ok || !m.readNeedsApproval(call) {
+			continue
+		}
+		if session && !check.Sensitive {
+			if m.readAllowed == nil {
+				m.readAllowed = map[string]bool{}
+			}
+			m.readAllowed[check.Path] = true
+			continue
+		}
+		if m.readOnce == nil {
+			m.readOnce = map[string]bool{}
+		}
+		m.readOnce[check.Path] = true
+	}
+	return m
+}
+
 func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	a := m.run.agent
 	if a == nil {
@@ -1029,6 +1150,7 @@ func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.denyTools()
 	case "enter", "y":
 		m.screen = screenChat
+		m = m.authorizeReadCalls(m.tool.calls, false)
 		a.pending = m.tool.calls
 		a.pendingIdx = 0
 		return m.executeNextTool()
@@ -1042,6 +1164,7 @@ func (m Model) toolKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.allowTools[cat] = true
 			}
 		}
+		m = m.authorizeReadCalls(m.tool.calls, true)
 		a.pending = m.tool.calls
 		a.pendingIdx = 0
 		return m.executeNextTool()
@@ -1104,6 +1227,19 @@ func (m Model) toolScreen() []uiLine {
 	args := prettyArgs(call.Function.Arguments)
 	for _, ln := range wrapText(args, innerW-2) {
 		body = append(body, uiLine{text: textStyle.Render(" " + ln)})
+	}
+	if check, isRead := m.readCheckFor(call); isRead && (check.Sensitive || check.Outside) {
+		label := "Fuera del proyecto: "
+		note := check.Reason
+		if check.Sensitive {
+			label = "Ruta sensible: "
+			note += " · [a] autoriza solo esta vez"
+		}
+		body = append(body,
+			uiLine{},
+			uiLine{text: warningStyle.Render(label) + textStyle.Render(note)},
+			uiLine{text: faintStyle.Render(check.Path)},
+		)
 	}
 	body = append(body,
 		uiLine{},

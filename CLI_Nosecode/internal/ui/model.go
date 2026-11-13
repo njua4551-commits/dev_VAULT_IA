@@ -150,6 +150,8 @@ type Model struct {
 	compacting       bool
 	compactingCancel context.CancelFunc
 	allowTools       map[string]bool
+	readAllowed      map[string]bool
+	readOnce         map[string]bool
 
 	clickAt    time.Time
 	clickX     int
@@ -1093,6 +1095,7 @@ func (m Model) loadSession(id string) Model {
 	}
 	m = m.dropAgent()
 	m = m.saveActive()
+	m = m.clearReadPermissions()
 	for _, s := range m.sessions {
 		if s.ID == id {
 			m.activeID = id
@@ -1112,6 +1115,7 @@ func (m Model) loadSession(id string) Model {
 func (m Model) newSession() Model {
 	m = m.dropAgent()
 	m = m.saveActive()
+	m = m.clearReadPermissions()
 	s := session.New()
 	if err := s.Save(); err != nil {
 		m.toast = "No se pudo crear la sesión"
@@ -1127,6 +1131,13 @@ func (m Model) newSession() Model {
 	m.toast = "Sesión creada"
 	m.screen = screenChat
 	m.layout()
+	return m
+}
+
+// clearReadPermissions olvida las rutas autorizadas al cambiar de sesión.
+func (m Model) clearReadPermissions() Model {
+	m.readOnce = nil
+	m.readAllowed = nil
 	return m
 }
 
@@ -1158,6 +1169,7 @@ func (m Model) closeSession(id string) Model {
 	}
 	m.activeID = m.sessions[next].ID
 	m.msgs = append([]Message{}, m.sessions[next].Messages...)
+	m = m.clearReadPermissions()
 	m = m.resetContextUsage()
 	m.scroll = 0
 	m.input.Reset()
@@ -1186,12 +1198,23 @@ func (m Model) toggleOption(id string) Model {
 }
 
 func (m Model) cyclePermission(id string) Model {
+	if id == "weblocal" {
+		if m.cfg.Permissions.WebfetchLocal == "allow" {
+			m.cfg.Permissions.WebfetchLocal = "deny"
+		} else {
+			m.cfg.Permissions.WebfetchLocal = "allow"
+		}
+		m.toast = "Web local: " + m.cfg.Permissions.WebfetchLocal
+		return m.saveCfg()
+	}
 	var value *string
 	switch id {
 	case "bash":
 		value = &m.cfg.Permissions.Bash
 	case "edit":
 		value = &m.cfg.Permissions.Edit
+	case "read":
+		value = &m.cfg.Permissions.Read
 	case "web":
 		value = &m.cfg.Permissions.Webfetch
 	case "mcp":
