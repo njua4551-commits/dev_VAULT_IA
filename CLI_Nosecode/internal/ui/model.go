@@ -27,6 +27,7 @@ const (
 	screenRename
 	screenConfirm
 	screenTool
+	screenBashWait
 )
 
 // toolConfirmState pide permiso antes de ejecutar una herramienta MCP.
@@ -155,48 +156,50 @@ type Message = session.Message
 
 // Model es el estado raiz de la TUI.
 type Model struct {
-	cfg         *config.Config
-	width       int
-	height      int
-	screen      screen
-	input       textarea.Model
-	msgs        []Message
-	sessions    []session.Session
-	activeID    string
-	scroll      int
-	toast       string
-	toastErr    bool
-	quit        bool
-	mode        string
-	plan        string
-	hoverBox    hitBox
-	tip         int
-	settings    settings
-	palette     palette
-	rename      renameState
-	confirm     confirmState
-	hit         *hitStore
-	run         runState
-	mcp         *mcp.Manager
-	mcpTools    []mcp.Tool
-	mcpErrs     []string
-	mcpLoading  bool
-	mcpInFlight bool
-	quota       quotaState
-	tool        toolConfirmState
-	sel         selectState
-	buf         *screenBuffer
-	slashMenu   slashState
-	activity    activityState
-	contextWin  int
-	usageTotal  int
-	usageValid  bool
-	ctxWarned   bool
-	lastServer  string
-	tunnelState string
-	tunnelBusy  bool
-	tunnelAt    time.Time
-	queue       []string
+	cfg          *config.Config
+	width        int
+	height       int
+	screen       screen
+	input        textarea.Model
+	msgs         []Message
+	sessions     []session.Session
+	activeID     string
+	scroll       int
+	toast        string
+	toastErr     bool
+	quit         bool
+	mode         string
+	plan         string
+	hoverBox     hitBox
+	tip          int
+	settings     settings
+	palette      palette
+	rename       renameState
+	confirm      confirmState
+	hit          *hitStore
+	run          runState
+	mcp          *mcp.Manager
+	mcpTools     []mcp.Tool
+	mcpErrs      []string
+	mcpLoading   bool
+	mcpInFlight  bool
+	quota        quotaState
+	tool         toolConfirmState
+	bashWait     bashWaitState
+	sel          selectState
+	buf          *screenBuffer
+	slashMenu    slashState
+	activity     activityState
+	contextWin   int
+	usageTotal   int
+	usageValid   bool
+	ctxWarned    bool
+	lastServer   string
+	lastServerAt time.Time
+	tunnelState  string
+	tunnelBusy   bool
+	tunnelAt     time.Time
+	queue        []string
 
 	compacting       bool
 	compactingCancel context.CancelFunc
@@ -318,6 +321,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onMCPReady(msg)
 	case toolDoneMsg:
 		return m.onToolDone(msg)
+	case bashWaitMsg:
+		return m.onBashWait(msg)
 	case activityMsg:
 		if msg.seq == m.activity.seq && m.activity.kind != "" {
 			var cmd tea.Cmd
@@ -399,6 +404,8 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.confirmKey(k)
 	case screenTool:
 		return m.toolKey(k)
+	case screenBashWait:
+		return m.bashWaitKey(k)
 	}
 
 	switch key {
@@ -645,6 +652,11 @@ func (m Model) activate(action, arg string) (tea.Model, tea.Cmd) {
 		return m.toolKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	case "toolToggle":
 		return m.toggleToolBlock(arg), nil
+	case "bashContinue":
+		return m.continueBashWait()
+	case "bashCancel":
+		w := m.bashWait
+		return m.cancelBashWait(w.call, w.proc, w.proc.Output(), w.elapsed, false)
 	case "slashItem":
 		idx, _ := strconv.Atoi(arg)
 		matches := m.slashMatches()
@@ -756,6 +768,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	m.msgs = append(m.msgs, Message{Role: "user", Text: text})
+	m = m.addContextEstimate(text)
 	if m.mode == "plan" {
 		m.plan = text
 	} else {
@@ -868,7 +881,13 @@ func (m Model) slash(text string) Model {
 			m.toast = "Modelo: " + rest
 		}
 	case "/vault":
+		if strings.EqualFold(rest, "status") {
+			nm, _ := m.startVault("status")
+			return nm
+		}
 		m = m.importVault()
+	case "/status":
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: m.statusReport()})
 	case "/copy", "/copiar":
 		return m.copyCommand(rest)
 	case "/mcp":
@@ -1363,6 +1382,14 @@ func messageText(msg api.ChatMessage) string {
 	return ""
 }
 
+// addContextEstimate añade un texto nuevo al contador real sin dejarlo viejo.
+func (m Model) addContextEstimate(text string) Model {
+	if m.usageValid && strings.TrimSpace(text) != "" {
+		m.usageTotal += estimateTokens(text)
+	}
+	return m
+}
+
 // contextUsed prefiere el usage real del servidor; si no, estima.
 func (m Model) contextUsed() int {
 	if m.usageValid && m.usageTotal > 0 {
@@ -1450,7 +1477,8 @@ var helpText = strings.Join([]string{
 	"  /up         encender la IA en Kaggle (vault.py up)",
 	"  /down       apagar la IA y dejar de gastar GPU (F8)",
 	"  /urls       ver qué túneles están vivos",
-	"  /status     estado del notebook en Kaggle",
+	"  /status     fase, herramienta, contexto y cola del agente",
+	"  /vault status  estado del notebook en Kaggle",
 	"  /copy          copiar la última respuesta completa",
 	"  /copy code [n] copiar un bloque de código",
 	"  /copy files    guardar los bloques en ~/.nosecode/copies",

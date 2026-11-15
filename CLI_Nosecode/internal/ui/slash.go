@@ -33,7 +33,7 @@ var slashEntries = []slashEntry{
 	{"/up", "encender la IA en Kaggle", false},
 	{"/down", "apagar la IA y dejar de gastar GPU", false},
 	{"/urls", "ver túneles vivos", false},
-	{"/status", "estado del notebook", false},
+	{"/status", "fase, herramienta, contexto y cola", false},
 	{"/tokens", "mostrar u ocultar el contador", false},
 	{"/sound", "activar o silenciar sonidos", false},
 	{"/theme", "cambiar tema", false},

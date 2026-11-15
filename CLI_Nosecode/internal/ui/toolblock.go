@@ -14,14 +14,15 @@ import (
 
 // Estados visibles de un bloque de herramienta.
 const (
-	toolWaiting   = "waiting"
-	toolApproval  = "approval"
-	toolRunning   = "running"
-	toolOK        = "ok"
-	toolError     = "error"
-	toolDenied    = "denied"
-	toolCancelled = "cancelled"
-	toolTimeout   = "timeout"
+	toolWaiting     = "waiting"
+	toolApproval    = "approval"
+	toolRunning     = "running"
+	toolOK          = "ok"
+	toolError       = "error"
+	toolDenied      = "denied"
+	toolCancelled   = "cancelled"
+	toolTimeout     = "timeout"
+	toolSoftTimeout = "soft_timeout"
 )
 
 // addToolBlocks crea un bloque visible por cada llamada antes de ejecutarla.
@@ -49,6 +50,9 @@ func (m Model) addToolBlocks(calls []api.ToolCall) Model {
 			Name:   shortTool(call.Function.Name),
 			Args:   toolArgsDisplay(call),
 			Status: status,
+		}
+		if _, ok := bashCommand(call); ok {
+			block.TimeoutS = bashTimeoutS(call)
 		}
 		m.msgs = append(m.msgs, Message{Role: "assistant", Tool: block})
 		a.toolIdx[call.ID] = len(m.msgs) - 1
@@ -203,6 +207,8 @@ func toolStatusLine(b *session.ToolBlock, now time.Time) string {
 		return mutedStyle.Render("⏹ cancelado")
 	case toolTimeout:
 		return warningStyle.Render(fmt.Sprintf("⌛ timeout %d s", b.TimeoutS))
+	case toolSoftTimeout:
+		return warningStyle.Render(fmt.Sprintf("⌛ %d s · esperando tu decisión", b.TimeoutS))
 	default:
 		return mutedStyle.Render(b.Status)
 	}

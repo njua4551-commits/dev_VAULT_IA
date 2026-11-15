@@ -25,6 +25,9 @@ type Result struct {
 	Error    bool
 	ExitCode int
 	Bytes    int
+	TimeoutS int
+	Soft     bool
+	Process  *BashProcess
 }
 
 // Tool describe una herramienta nativa.
@@ -44,8 +47,8 @@ func init() {
 	list := []Tool{
 		{
 			Name:        "bash",
-			Description: "Ejecuta un comando en PowerShell (Windows) o bash/sh (Linux); timeout 60 s y salida máx. 8 KB.",
-			Parameters:  schema(`{"type":"object","properties":{"command":{"type":"string","description":"Comando a ejecutar"}},"required":["command"],"additionalProperties":false}`),
+			Description: "Ejecuta un comando en PowerShell (Windows) o bash/sh (Linux); timeout_s 1..600 (60 por defecto) y salida máx. 8 KB.",
+			Parameters:  schema(`{"type":"object","properties":{"command":{"type":"string","description":"Comando a ejecutar"},"timeout_s":{"type":"integer","description":"Segundos antes del timeout suave (1..600)"}},"required":["command"],"additionalProperties":false}`),
 			Run:         runBash,
 		},
 		{

@@ -7,8 +7,10 @@ import (
 	"syscall"
 )
 
+// prepareCommand arranca el comando en una sesión nueva, sin terminal de
+// control: sudo y otros prompts fallan en vez de quedarse esperando.
 func prepareCommand(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
 
 func killCommand(cmd *exec.Cmd) {

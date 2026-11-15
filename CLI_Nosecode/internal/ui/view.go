@@ -44,6 +44,8 @@ func (m Model) View() string {
 			lines = m.confirmScreen()
 		case screenTool:
 			lines = m.toolScreen()
+		case screenBashWait:
+			lines = m.bashWaitScreen()
 		default:
 			lines = m.mainScreen()
 		}

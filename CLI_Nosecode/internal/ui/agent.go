@@ -114,7 +114,9 @@ const agentSystem = "Eres Nosecode, un agente de terminal con herramientas nativ
 	"8. No ejecutes comandos destructivos sin explicar qué harás y por qué.\n" +
 	"9. Si modificas el propio Nosecode, haz checkpoint con safe-edit.sh (o safe-edit.ps1), " +
 	"compila a un binario nuevo en dist y revierte si fallan go build o go test.\n" +
-	"10. Responde en español, breve y claro. No inventes resultados."
+	"10. No uses sudo ni comandos interactivos; evita comandos que recorran todo el disco; " +
+	"para trabajos largos pide un timeout_s mayor.\n" +
+	"11. Responde en español, breve y claro. No inventes resultados."
 
 type mcpReadyMsg struct {
 	manager *mcp.Manager
@@ -129,6 +131,9 @@ type toolDoneMsg struct {
 	duration time.Duration
 	exitCode int
 	bytes    int
+	timeoutS int
+	soft     bool
+	process  *tools.BashProcess
 }
 
 func (m Model) useAgent() bool {
@@ -399,6 +404,21 @@ func bashCommand(call api.ToolCall) (string, bool) {
 	return strings.TrimSpace(a.Command), true
 }
 
+// bashTimeoutS devuelve el timeout pedido por el modelo (60 por defecto,
+// recortado a 600) para mostrarlo en la confirmación y en el bloque.
+func bashTimeoutS(call api.ToolCall) int {
+	var a struct {
+		TimeoutS int `json:"timeout_s"`
+	}
+	if json.Unmarshal([]byte(call.Function.Arguments), &a) != nil || a.TimeoutS <= 0 {
+		return 60
+	}
+	if a.TimeoutS > 600 {
+		return 600
+	}
+	return a.TimeoutS
+}
+
 // logBashCalls deja rastro de la aprobación y del comando ejecutado sin
 // guardar credenciales en debug.log.
 func logBashCalls(phase string, calls []api.ToolCall) {
@@ -513,6 +533,10 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	}
 	c := msg.c
 	i := m.lastIdx()
+	if c.Base != "" {
+		m.lastServer = c.Base
+		m.lastServerAt = time.Now()
+	}
 	if c.Usage != nil {
 		a.sawUsage = true
 		a.lastToken = time.Now()
@@ -811,7 +835,9 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		start := time.Now()
 		if isNative {
 			res := native.Run(ctx, json.RawMessage(call.Function.Arguments))
-			return toolDoneMsg{call: call, result: nativeResult(res), duration: time.Since(start), exitCode: res.ExitCode, bytes: res.Bytes}
+			return toolDoneMsg{call: call, result: nativeResult(res), duration: time.Since(start),
+				exitCode: res.ExitCode, bytes: res.Bytes, timeoutS: res.TimeoutS,
+				soft: res.Soft, process: res.Process}
 		}
 		if mgr == nil {
 			return toolDoneMsg{call: call, err: errors.New("MCP no conectado"), duration: time.Since(start), exitCode: 1}
@@ -887,7 +913,7 @@ func (m Model) appendToolResult(call api.ToolCall, text string, imgs []api.Conte
 		if duration > 0 {
 			b.DurationMS = duration.Milliseconds()
 		}
-		if b.Status == toolDenied || b.Status == toolCancelled || b.Status == toolTimeout {
+		if b.Status == toolDenied || b.Status == toolCancelled || b.Status == toolTimeout || b.Status == toolSoftTimeout {
 			return
 		}
 		if isErr {
@@ -905,6 +931,7 @@ func (m Model) appendToolResult(call api.ToolCall, text string, imgs []api.Conte
 		}
 		m.msgs = append(m.msgs, Message{Role: "assistant", Text: toolTag + label + "\n" + preview})
 	}
+	m = m.addContextEstimate(text)
 	m.scroll = 0
 	m.layout()
 	return m
@@ -964,6 +991,22 @@ func (m Model) onToolDone(msg toolDoneMsg) (tea.Model, tea.Cmd) {
 	a := m.run.agent
 	if a == nil {
 		return m, nil
+	}
+	if msg.soft && msg.process != nil {
+		select {
+		case <-msg.process.Done():
+			// Terminó entre el timeout suave y el mensaje: no hace falta modal.
+			msg.soft = false
+			msg.result.Text = msg.process.Output()
+			msg.result.Error = msg.process.Err() != nil
+			if msg.result.Error {
+				msg.result.Text += "\nError: " + msg.process.Err().Error()
+			}
+			msg.exitCode = msg.process.ExitCode()
+			msg.duration = time.Since(msg.process.Started())
+		default:
+			return m.beginBashWait(msg)
+		}
 	}
 	m = m.stopActivity()
 	a.activeCallID = ""
@@ -1371,10 +1414,13 @@ func (m Model) toolScreen() []uiLine {
 		{},
 	}
 	if cmd, isBash := bashCommand(call); isBash {
-		body = append(body, uiLine{text: faintStyle.Render("Comando")})
+		body = append(body,
+			uiLine{text: faintStyle.Render("Comando")},
+		)
 		for _, ln := range wrapText(cmd, innerW-2) {
 			body = append(body, uiLine{text: textStyle.Render(" " + ln)})
 		}
+		body = append(body, uiLine{text: faintStyle.Render("Timeout    ") + textStyle.Render(fmt.Sprintf("%d s (máx. 600)", bashTimeoutS(call)))})
 	} else {
 		body = append(body, uiLine{text: faintStyle.Render("Argumentos")})
 		args := prettyArgs(call.Function.Arguments)

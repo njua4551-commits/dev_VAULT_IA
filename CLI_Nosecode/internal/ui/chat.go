@@ -58,7 +58,7 @@ func waitVault(v *api.VaultRun) tea.Cmd {
 const vaultTag = "Vault · "
 
 // vaultCommands son los comandos de barra que ejecutan client/vault.py.
-var vaultCommands = map[string]string{"/up": "up", "/down": "down", "/urls": "urls", "/status": "status"}
+var vaultCommands = map[string]string{"/up": "up", "/down": "down", "/urls": "urls"}
 
 func vaultCommand(text string) (string, bool) {
 	f := strings.Fields(text)
@@ -168,6 +168,10 @@ func (m Model) onChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 	}
 	c := msg.c
 	i := m.lastIdx()
+	if c.Base != "" {
+		m.lastServer = c.Base
+		m.lastServerAt = time.Now()
+	}
 	if c.Usage != nil {
 		m.usageTotal = c.Usage.TotalTokens
 		m.usageValid = true
@@ -296,6 +300,10 @@ func (m Model) onVault(msg vaultMsg) (tea.Model, tea.Cmd) {
 // cancelBusy corta la respuesta o el comando en curso.
 func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 	debuglog.Logf("turn cancel agent=%v stream=%v vault=%v compact=%v", m.run.agent != nil, m.run.stream != nil, m.run.vault != nil, m.compacting)
+	if m.bashWait.proc != nil {
+		m.bashWait.proc.Kill()
+		m.bashWait = bashWaitState{}
+	}
 	if m.compacting {
 		if m.compactingCancel != nil {
 			m.compactingCancel()
@@ -323,13 +331,25 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 				ToolCallID: call.ID,
 			})
 		}
+		if len(a.pending) == 0 {
+			for _, call := range m.tool.calls {
+				if call.ID == "" {
+					continue
+				}
+				a.msgs = append(a.msgs, api.ChatMessage{
+					Role:       "tool",
+					Content:    "cancelado por el usuario",
+					ToolCallID: call.ID,
+				})
+			}
+		}
 		for i := range m.msgs {
 			b := m.msgs[i].Tool
 			if b == nil {
 				continue
 			}
 			switch b.Status {
-			case toolWaiting, toolApproval, toolRunning:
+			case toolWaiting, toolApproval, toolRunning, toolSoftTimeout:
 				b.Status = toolCancelled
 				if strings.TrimSpace(b.Output) == "" {
 					b.Output = "cancelado por el usuario"
@@ -364,6 +384,10 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 
 // cancelAll se usa al salir.
 func (m Model) cancelAll() {
+	if m.bashWait.proc != nil {
+		m.bashWait.proc.Kill()
+		m.bashWait = bashWaitState{}
+	}
 	if m.compactingCancel != nil {
 		m.compactingCancel()
 	}
