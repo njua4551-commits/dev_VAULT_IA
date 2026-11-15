@@ -79,6 +79,9 @@ func apiMessages(msgs []Message, plan bool) []api.ChatMessage {
 		out = append(out, api.ChatMessage{Role: "system", Content: planSystem})
 	}
 	for _, msg := range msgs {
+		if msg.Tool != nil {
+			continue // traza visible: vive en el historial del agente
+		}
 		text := strings.TrimSpace(msg.Text)
 		if text == "" || (msg.Role != "user" && msg.Role != "assistant") {
 			continue
@@ -302,11 +305,36 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 		m.toast, m.toastErr = "Compactación cancelada", false
 	}
 	if m.run.agent != nil {
-		if m.run.agent.cancel != nil {
-			m.run.agent.cancel()
+		a := m.run.agent
+		if a.cancel != nil {
+			a.cancel()
 		}
-		if m.run.agent.stream != nil {
-			m.run.agent.stream.Cancel()
+		if a.stream != nil {
+			a.stream.Cancel()
+		}
+		for i := a.pendingIdx; i < len(a.pending); i++ {
+			call := a.pending[i]
+			if call.ID == "" {
+				continue
+			}
+			a.msgs = append(a.msgs, api.ChatMessage{
+				Role:       "tool",
+				Content:    "cancelado por el usuario",
+				ToolCallID: call.ID,
+			})
+		}
+		for i := range m.msgs {
+			b := m.msgs[i].Tool
+			if b == nil {
+				continue
+			}
+			switch b.Status {
+			case toolWaiting, toolApproval, toolRunning:
+				b.Status = toolCancelled
+				if strings.TrimSpace(b.Output) == "" {
+					b.Output = "cancelado por el usuario"
+				}
+			}
 		}
 		m = m.clearConnecting()
 		m.run.agent = nil

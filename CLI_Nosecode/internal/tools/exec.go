@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -70,19 +71,31 @@ func runBash(ctx context.Context, raw json.RawMessage) Result {
 			text += "\n"
 		}
 		text += "Error: el comando superó el timeout de 60 s"
-		return Result{Text: text, Error: true}
+		return Result{Text: text, Error: true, ExitCode: 1, Bytes: len(text)}
 	}
 	if err != nil {
 		if text != "" {
 			text += "\n"
 		}
 		text += "Error: " + err.Error()
-		return Result{Text: text, Error: true}
+		return Result{Text: text, Error: true, ExitCode: exitCodeOf(err), Bytes: len(text)}
 	}
 	if text == "" {
 		text = "(sin salida)"
 	}
-	return Result{Text: text}
+	return Result{Text: text, Bytes: len(text)}
+}
+
+// exitCodeOf extrae el código de salida real del proceso.
+func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return 1
 }
 
 type limitedBuffer struct {

@@ -20,9 +20,11 @@ type Image struct {
 
 // Result es el resultado de ejecutar una herramienta.
 type Result struct {
-	Text   string
-	Images []Image
-	Error  bool
+	Text     string
+	Images   []Image
+	Error    bool
+	ExitCode int
+	Bytes    int
 }
 
 // Tool describe una herramienta nativa.

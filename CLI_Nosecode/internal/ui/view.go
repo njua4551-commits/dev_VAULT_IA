@@ -155,6 +155,7 @@ func (m Model) homeScreen() []uiLine {
 	for _, ln := range m.promptBox(boxW) {
 		content = append(content, shiftLine(ln, boxX))
 	}
+	content = append(content, m.activityLine(m.width))
 
 	hints := keyHint("shift+tab", "agentes") + "   " + keyHint("ctrl+p", "comandos")
 	hx := boxX + boxW - lipgloss.Width(hints)
@@ -269,7 +270,7 @@ func (m Model) sessionScreen() []uiLine {
 		menu = menu[:maxMenu]
 	}
 
-	chatH := bodyRows - len(tabs) - len(head) - len(box) - len(menu)
+	chatH := bodyRows - len(tabs) - len(head) - len(box) - len(menu) - 1
 	if chatH < 4 {
 		chatH = 4
 	}
@@ -278,6 +279,7 @@ func (m Model) sessionScreen() []uiLine {
 	main = append(main, tabs...)
 	main = append(main, head...)
 	main = append(main, m.chatLines(chatH, mainW)...)
+	main = append(main, m.activityLine(mainW))
 	for _, ln := range menu {
 		main = append(main, shiftLine(ln, boxX))
 	}
@@ -651,6 +653,10 @@ func (m Model) chatContent(width int) []uiLine {
 
 	lines := []uiLine{blankChat()}
 	for i, msg := range m.msgs {
+		if msg.Tool != nil {
+			lines = append(lines, m.toolBlockLines(i, msg.Tool, width)...)
+			continue
+		}
 		if msg.Role == "assistant" {
 			for _, ln := range wrapText(sanitizeText(msg.Text), botW) {
 				row := uiLine{
@@ -859,6 +865,90 @@ func (m Model) activityText() string {
 	default:
 		return a.label
 	}
+}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// activityLineText es la línea fija sobre el input: fase, segundos y avisos.
+func (m Model) activityLineText() string {
+	if m.compacting {
+		secs := int(time.Since(m.activity.started).Seconds())
+		if m.activity.kind == "" {
+			secs = 0
+		}
+		return fmt.Sprintf("compactando la conversación %d s (esc cancela)", maxInt(secs, 0))
+	}
+	if a := m.run.agent; a != nil && a.paused {
+		return fmt.Sprintf("pausado %d/%d (escribe continúa)", a.steps, m.maxSteps())
+	}
+	if m.screen == screenTool {
+		return "esperando tu aprobación (y permitir · n denegar · esc cancela)"
+	}
+	if m.activity.kind == "" {
+		if len(m.queue) > 0 {
+			return fmt.Sprintf("listo · %d mensaje(s) en cola", len(m.queue))
+		}
+		return "listo"
+	}
+	secs := int(time.Since(m.activity.started).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	text := ""
+	switch m.activity.kind {
+	case "model":
+		text = fmt.Sprintf("esperando al modelo %d s (esc cancela)", secs)
+		if a := m.run.agent; a != nil && !a.lastToken.IsZero() {
+			idle := int(time.Since(a.lastToken).Seconds())
+			if idle >= 45 {
+				text = fmt.Sprintf("el modelo no responde hace %d s · esc cancela", idle)
+				switch {
+				case m.tunnelBusy:
+					text += " · comprobando túnel…"
+				case m.tunnelState == "ok":
+					text += " · túnel OK"
+				case m.tunnelState == "down":
+					text += " · túnel caído (probando otro…)"
+				}
+			}
+		}
+	case "stream":
+		text = fmt.Sprintf("recibiendo respuesta %d s", secs)
+	case "tool":
+		text = fmt.Sprintf("ejecutando %s %d s (esc cancela)", m.activity.label, secs)
+		if b := m.activeToolBlock(); b != nil && b.TimeoutS > 0 {
+			text = fmt.Sprintf("ejecutando %s %d s / %d s (esc cancela)", m.activity.label, secs, b.TimeoutS)
+		}
+	case "image":
+		text = fmt.Sprintf("procesando imagen %d s", secs)
+	default:
+		text = m.activity.label
+	}
+	if len(m.queue) > 0 {
+		text += fmt.Sprintf(" · %d en cola", len(m.queue))
+	}
+	return text
+}
+
+// activityLine pinta la línea fija que va justo encima del campo de entrada.
+func (m Model) activityLine(width int) uiLine {
+	text := m.activityLineText()
+	working := m.activity.kind != "" || m.compacting || m.screen == screenTool
+	icon := successStyle.Render("●")
+	style := mutedStyle
+	if working {
+		icon = primaryStyle.Render(spinnerFrames[int(time.Now().UnixNano()/int64(time.Millisecond/10))%len(spinnerFrames)])
+		style = textStyle
+	} else if a := m.run.agent; a != nil && a.paused {
+		icon = warningStyle.Render("❚❚")
+	}
+	if text == "" {
+		text = "listo"
+	}
+	if width < 4 {
+		return uiLine{text: ""}
+	}
+	return uiLine{text: " " + icon + " " + style.Render(fit(text, width-4))}
 }
 
 // -------------------------------------------------------------- utils ---

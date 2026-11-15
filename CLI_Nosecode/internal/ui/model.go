@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -36,20 +37,26 @@ type toolConfirmState struct {
 
 // agentRun mantiene el bucle del agente y su historial de herramientas.
 type agentRun struct {
-	msgs       []api.ChatMessage
-	stream     *api.Streamer
-	assistant  string
-	calls      []api.ToolCall
-	pending    []api.ToolCall
-	pendingIdx int
-	rounds     int
-	steps      int
-	connecting bool
-	paused     bool
-	wrapup     bool
-	ctx        context.Context
-	cancel     context.CancelFunc
-	failures   toolFailureGuard
+	msgs          []api.ChatMessage
+	stream        *api.Streamer
+	assistant     string
+	calls         []api.ToolCall
+	pending       []api.ToolCall
+	pendingIdx    int
+	rounds        int
+	steps         int
+	connecting    bool
+	paused        bool
+	wrapup        bool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	failures      toolFailureGuard
+	toolIdx       map[string]int
+	activeCallID  string
+	hadToolResult bool
+	emptyRetries  int
+	lastToken     time.Time
+	sawUsage      bool
 }
 
 func (a *agentRun) busy() bool {
@@ -70,6 +77,22 @@ func activityTick(seq int) tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return activityMsg{seq: seq} })
 }
 
+type tunnelMsg struct{ ok bool }
+
+// tunnelPingCmd comprueba /health en todos los endpoints conocidos.
+func tunnelPingCmd(bases []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		for _, base := range bases {
+			if api.Ping(ctx, base) {
+				return tunnelMsg{ok: true}
+			}
+		}
+		return tunnelMsg{ok: false}
+	}
+}
+
 func (m Model) startActivity(kind, label string) (Model, tea.Cmd) {
 	m.activity = activityState{
 		kind:    kind,
@@ -83,6 +106,29 @@ func (m Model) startActivity(kind, label string) (Model, tea.Cmd) {
 func (m Model) stopActivity() Model {
 	m.activity = activityState{seq: m.activity.seq + 1}
 	return m
+}
+
+// checkModelWatchdog lanza una comprobación de /health si el modelo lleva 45 s
+// sin enviar tokens. Se repite como máximo cada 15 s.
+func (m Model) checkModelWatchdog() (Model, tea.Cmd) {
+	a := m.run.agent
+	if a == nil || a.stream == nil || m.activity.kind != "model" {
+		return m, nil
+	}
+	if time.Since(a.lastToken) < 45*time.Second {
+		return m, nil
+	}
+	if m.tunnelBusy || (!m.tunnelAt.IsZero() && time.Since(m.tunnelAt) < 15*time.Second) {
+		return m, nil
+	}
+	_, p := m.cfg.Active()
+	bases := api.Bases(p.BaseURL, config.VaultHome())
+	if len(bases) == 0 {
+		return m, nil
+	}
+	m.tunnelBusy = true
+	m.tunnelState = ""
+	return m, tunnelPingCmd(bases)
 }
 
 // renameState edita el titulo de una sesion.
@@ -146,6 +192,11 @@ type Model struct {
 	usageTotal  int
 	usageValid  bool
 	ctxWarned   bool
+	lastServer  string
+	tunnelState string
+	tunnelBusy  bool
+	tunnelAt    time.Time
+	queue       []string
 
 	compacting       bool
 	compactingCancel context.CancelFunc
@@ -269,7 +320,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onToolDone(msg)
 	case activityMsg:
 		if msg.seq == m.activity.seq && m.activity.kind != "" {
-			return m, activityTick(msg.seq)
+			var cmd tea.Cmd
+			m, cmd = m.checkModelWatchdog()
+			return m, tea.Batch(activityTick(msg.seq), cmd)
+		}
+		return m, nil
+	case tunnelMsg:
+		m.tunnelBusy = false
+		m.tunnelAt = time.Now()
+		if msg.ok {
+			m.tunnelState = "ok"
+		} else {
+			m.tunnelState = "down"
 		}
 		return m, nil
 	case vaultMsg:
@@ -355,6 +417,8 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m = m.saveCfg()
 		m.toast = "Barra lateral: " + onOff(m.cfg.UI.Sidebar)
 		return m, nil
+	case "ctrl+o":
+		return m.toggleToolBlock(""), nil
 	}
 
 	switch m.screen {
@@ -392,7 +456,10 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.run.busy() || m.compacting {
-			m.toast, m.toastErr = "Espera a que termine o pulsa esc para cancelar", false
+			text := strings.TrimSpace(m.input.Value())
+			m.queue = append(m.queue, text)
+			m.input.Reset()
+			m.toast, m.toastErr = fmt.Sprintf("En cola · %d mensaje(s); esc cancela el turno", len(m.queue)), false
 			return m, nil
 		}
 		return m.submit()
@@ -576,6 +643,8 @@ func (m Model) activate(action, arg string) (tea.Model, tea.Cmd) {
 		return m.toolKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	case "toolDeny":
 		return m.toolKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	case "toolToggle":
+		return m.toggleToolBlock(arg), nil
 	case "slashItem":
 		idx, _ := strconv.Atoi(arg)
 		matches := m.slashMatches()

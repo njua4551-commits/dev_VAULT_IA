@@ -14,10 +14,28 @@ import (
 	"nosecode/internal/config"
 )
 
-// Message es un turno de la conversacion.
+// ToolBlock es la traza visible de una llamada a herramienta. Se guarda con
+// la sesión para que el usuario pueda revisar qué se ejecutó, cuánto tardó y
+// qué salida produjo, sin reenviar todo al modelo.
+type ToolBlock struct {
+	CallID     string    `json:"call_id,omitempty"`
+	Name       string    `json:"name"`
+	Args       string    `json:"args,omitempty"`
+	Status     string    `json:"status"`
+	Output     string    `json:"output,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+	ExitCode   int       `json:"exit_code,omitempty"`
+	TimeoutS   int       `json:"timeout_s,omitempty"`
+	Started    time.Time `json:"started,omitempty"`
+	Expanded   bool      `json:"expanded,omitempty"`
+}
+
+// Message es un turno de la conversacion. Text es el texto normal; Tool es la
+// traza estructurada de una herramienta (si la hay).
 type Message struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
+	Role string     `json:"role"`
+	Text string     `json:"text"`
+	Tool *ToolBlock `json:"tool,omitempty"`
 }
 
 // Session es una conversacion persistida en ~/.nosecode/sessions.

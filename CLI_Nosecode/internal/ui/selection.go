@@ -345,6 +345,9 @@ func (m Model) lastAssistant() (Message, bool) {
 		if msg.Role != "assistant" || strings.TrimSpace(msg.Text) == "" {
 			continue
 		}
+		if msg.Tool != nil {
+			continue
+		}
 		if strings.HasPrefix(msg.Text, vaultTag) || strings.HasPrefix(msg.Text, toolTag) {
 			continue
 		}

@@ -98,7 +98,7 @@ func TestFinishAgentConservaAvisoContexto(t *testing.T) {
 	m.ctxWarned = true
 	m.toast = "Contexto al 85% · usa /compact para resumir"
 	m.run.agent = &agentRun{}
-	m = m.finishAgent()
+	m, _ = m.finishAgent()
 	if !strings.Contains(m.toast, "/compact") {
 		t.Fatalf("toast = %q", m.toast)
 	}
