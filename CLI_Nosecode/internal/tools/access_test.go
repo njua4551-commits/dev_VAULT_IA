@@ -105,6 +105,28 @@ func TestCheckReadPathEnvYSensible(t *testing.T) {
 	}
 }
 
+func TestNosecodeHomeYDebugLogSensibles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NOSECODE_HOME", dir)
+	for _, path := range []string{
+		dir,
+		filepath.Join(dir, "debug.log"),
+		filepath.Join(dir, "sessions", "s-1.json"),
+		filepath.Join(dir, "config.json"),
+	} {
+		if check := CheckReadPath(path, t.TempDir()); !check.Sensitive {
+			t.Fatalf("%s debería ser sensible: %+v", path, check)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NOSECODE_HOME", "")
+	if check := CheckReadPath(filepath.Join(home, ".nosecode", "debug.log"), t.TempDir()); !check.Sensitive {
+		t.Fatalf("~/.nosecode/debug.log debería ser sensible: %+v", check)
+	}
+}
+
 func TestReadDeniedMessageExplica(t *testing.T) {
 	check := CheckReadPath(filepath.Join("..", "secreto.txt"), t.TempDir())
 	msg := ReadDeniedMessage(check)

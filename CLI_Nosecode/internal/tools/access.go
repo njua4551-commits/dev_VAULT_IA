@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"nosecode/internal/config"
 )
 
 // ReadDecision es lo que debe hacer el cliente ante una lectura.
@@ -125,6 +127,7 @@ func sensitiveEntries() []sensitiveEntry {
 	if home != "" {
 		add(filepath.Join(home, ".dev-vault"), true, "configuración del Dev Vault")
 		add(filepath.Join(home, ".nosecode", "config.json"), false, "configuración de Nosecode")
+		add(filepath.Join(home, ".nosecode", "debug.log"), false, "registro de depuración de Nosecode")
 		add(filepath.Join(home, ".ssh"), true, "claves SSH")
 		add(filepath.Join(home, ".gnupg"), true, "claves GPG")
 		add(filepath.Join(home, ".kaggle"), true, "credenciales de Kaggle")
@@ -132,6 +135,8 @@ func sensitiveEntries() []sensitiveEntry {
 		add(filepath.Join(home, ".git-credentials"), false, "credenciales de Git")
 		add(filepath.Join(home, ".config", "gcloud"), true, "credenciales de Google Cloud")
 	}
+	// NOSECODE_HOME (o ~/.nosecode) guarda config, sesiones, imágenes y el log.
+	add(config.Home(), true, "directorio de Nosecode (configuración y sesiones)")
 	if configDir != "" {
 		add(filepath.Join(configDir, "gcloud"), true, "credenciales de Google Cloud")
 	}

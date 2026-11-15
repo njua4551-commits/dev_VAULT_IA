@@ -231,7 +231,7 @@ func runWebFetch(ctx context.Context, raw json.RawMessage) Result {
 		return errResult("el contenido no es texto (%s)", contentType)
 	}
 
-	text = truncateText(strings.TrimSpace(text), limit)
+	text = truncateText(neutralizeWebDelimiters(strings.TrimSpace(text)), limit)
 	header := fmt.Sprintf("%s · HTTP %d", target, resp.StatusCode)
 	if contentType != "" {
 		header += " · " + contentType
@@ -240,6 +240,14 @@ func runWebFetch(ctx context.Context, raw json.RawMessage) Result {
 		text = "(sin texto)"
 	}
 	return Result{Text: header + "\n\n" + webContentOpen + "\n" + text + "\n" + webContentClose}
+}
+
+// neutralizeWebDelimiters impide que una página cierre el bloque de contenido
+// no confiable antes de tiempo (también en text/plain).
+func neutralizeWebDelimiters(text string) string {
+	text = strings.ReplaceAll(text, webContentOpen, "[[CONTENIDO_WEB_NO_CONFIABLE escapado]]")
+	text = strings.ReplaceAll(text, webContentClose, "[[FIN_CONTENIDO_WEB escapado]]")
+	return text
 }
 
 func htmlToText(s string) string {
