@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	CurrentVersion       = 2
-	DefaultContextWindow = 131072
-	DefaultCompactKeep   = 6
-	DefaultMaxSteps      = 30
-	MaxStepsLimit        = 100
+	CurrentVersion         = 2
+	DefaultContextWindow   = 131072
+	DefaultCompactKeep     = 6
+	DefaultCompactReserved = 8192
+	DefaultMaxSteps        = 30
+	MaxStepsLimit          = 100
 )
 
 // ToolSettings controla que herramientas se envían al modelo. Las nativas
@@ -28,6 +29,9 @@ type ToolSettings struct {
 	MCP         bool `json:"mcp"`
 	CompactKeep int  `json:"compact_keep"`
 	MaxSteps    int  `json:"max_steps"`
+	// CompactReserved son los tokens que se dejan libres para la respuesta:
+	// avisa antes de llenar la ventana y limita max_tokens.
+	CompactReserved int `json:"compact_reserved"`
 }
 
 // Provider describe un endpoint compatible con la API de OpenAI.
@@ -39,15 +43,38 @@ type Provider struct {
 	ContextWindow int    `json:"context_window"`
 }
 
+// BashRule es una regla ordenada de permisos para bash. La primera regla que
+// coincide gana; action = allow | ask | deny.
+type BashRule struct {
+	Pattern string `json:"pattern"`
+	Action  string `json:"action"`
+}
+
 // Permissions define que puede hacer el agente sin preguntar.
 // Valores: "ask", "allow", "deny".
 type Permissions struct {
-	Bash          string `json:"bash"`
-	Edit          string `json:"edit"`
-	Webfetch      string `json:"webfetch"`
-	WebfetchLocal string `json:"webfetch_local"`
-	Read          string `json:"read"`
-	MCP           string `json:"mcp"`
+	Bash          string     `json:"bash"`
+	BashRules     []BashRule `json:"bash_rules,omitempty"`
+	Edit          string     `json:"edit"`
+	Webfetch      string     `json:"webfetch"`
+	WebfetchLocal string     `json:"webfetch_local"`
+	Read          string     `json:"read"`
+	MCP           string     `json:"mcp"`
+}
+
+// DefaultBashRules es la lista cerrada que puede auto-aprobarse sin preguntar.
+func DefaultBashRules() []BashRule {
+	return []BashRule{
+		{Pattern: "pwd", Action: "allow"},
+		{Pattern: "ls", Action: "allow"},
+		{Pattern: "ls -la", Action: "allow"},
+		{Pattern: "git status", Action: "allow"},
+		{Pattern: "git diff", Action: "allow"},
+		{Pattern: "git log", Action: "allow"},
+		{Pattern: "cat *", Action: "allow"},
+		{Pattern: "uname -a", Action: "allow"},
+		{Pattern: "whoami", Action: "allow"},
+	}
 }
 
 // MCPServer describe un servidor MCP local (stdio) o remoto (HTTP).
@@ -76,6 +103,8 @@ type UI struct {
 	Tokens     bool   `json:"tokens"`
 	Mute       bool   `json:"mute"`
 	Mode       string `json:"mode"`
+	// Thinking: "" (lo que decida el servidor), "on" u "off".
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // Config es el archivo completo.
@@ -132,13 +161,14 @@ func Defaults() *Config {
 		},
 		Permissions: Permissions{
 			Bash:          "ask",
+			BashRules:     DefaultBashRules(),
 			Edit:          "ask",
 			Webfetch:      "ask",
 			WebfetchLocal: "deny",
 			Read:          "ask",
 			MCP:           "ask",
 		},
-		Tools: ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps},
+		Tools: ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps, CompactReserved: DefaultCompactReserved},
 		MCP:   MCP{Servers: map[string]MCPServer{}},
 		UI: UI{
 			Theme:      "vercel",
@@ -172,6 +202,10 @@ func Load() (*Config, error) {
 
 	if err := json.Unmarshal(raw, cfg); err != nil {
 		return nil, fmt.Errorf("%s no es JSON valido: %w", cfg.Path, err)
+	}
+	if cfg.Permissions.BashRules == nil {
+		// Config antigua sin bash_rules: aplica la lista cerrada por defecto.
+		cfg.Permissions.BashRules = DefaultBashRules()
 	}
 	cfg.Path = File()
 	cfg.normalize()
@@ -253,6 +287,9 @@ func (c *Config) normalize() {
 	}
 	if c.Tools.CompactKeep <= 0 {
 		c.Tools.CompactKeep = DefaultCompactKeep
+	}
+	if c.Tools.CompactReserved <= 0 {
+		c.Tools.CompactReserved = DefaultCompactReserved
 	}
 	if c.Tools.MaxSteps <= 0 {
 		c.Tools.MaxSteps = DefaultMaxSteps

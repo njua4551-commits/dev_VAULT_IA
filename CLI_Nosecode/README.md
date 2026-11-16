@@ -17,7 +17,7 @@ sesiones locales y navegación con teclado o ratón.
                                     shift+tab agentes   ctrl+p comandos
 ```
 
-## Estado actual (0.6.0)
+## Estado actual (0.9.0)
 
 La interfaz funciona sin ningún endpoint configurado: puedes abrirla, navegar
 los ajustes, crear proveedores y conservar tus conversaciones. No realiza

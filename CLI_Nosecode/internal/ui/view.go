@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +47,14 @@ func (m Model) View() string {
 			lines = m.toolScreen()
 		case screenBashWait:
 			lines = m.bashWaitScreen()
+		case screenQuestion:
+			lines = m.questionScreen()
+		case screenSudo:
+			lines = m.sudoScreen()
+		case screenImage:
+			lines = m.imageScreen()
+		case screenCatalog:
+			lines = m.catalogScreen()
 		default:
 			lines = m.mainScreen()
 		}
@@ -479,6 +488,10 @@ func (m Model) railLines(height int) []uiLine {
 		add("")
 	}
 
+	for _, r := range m.todoRailRows(cw) {
+		add(r)
+	}
+
 	dot := warningStyle.Render("●")
 	state := "sin endpoint"
 	if p.BaseURL != "" && p.APIKey != "" {
@@ -660,6 +673,7 @@ func (m Model) chatContent(width int) []uiLine {
 			continue
 		}
 		if msg.Role == "assistant" {
+			lines = append(lines, m.thinkLines(i, msg.Think, width, botW)...)
 			for _, ln := range wrapText(sanitizeText(msg.Text), botW) {
 				row := uiLine{
 					text:     spaces(5) + textStyle.Render(ln),
@@ -699,6 +713,26 @@ func (m Model) chatContent(width int) []uiLine {
 		for _, ln := range wrapText(sanitizeText(msg.Text), userW) {
 			lines = append(lines, userRow(textStyle.Render(ln), i, true))
 		}
+		for k, path := range msg.Images {
+			if k == 3 {
+				lines = append(lines, userRow(faintStyle.Render(fmt.Sprintf("🖼 +%d imagen(es) más · ctrl+g", len(msg.Images)-3)), i, false))
+				break
+			}
+			rows, w, ok := thumb(path, thumbCols, thumbRows)
+			if !ok {
+				lines = append(lines, userRow(faintStyle.Render("🖼 imagen no disponible: "+filepath.Base(path)), i, false))
+				continue
+			}
+			hit := relHit{x: 5, w: w, action: "imgOpen", arg: fmt.Sprintf("%d:%d", i, k)}
+			for _, r := range rows {
+				ln := userRow(r, i, false)
+				ln.hits = []relHit{hit}
+				lines = append(lines, ln)
+			}
+			cap := userRow(faintStyle.Render("🖼 "+filepath.Base(path)+" · clic o ctrl+g para ampliar"), i, false)
+			cap.hits = []relHit{hit}
+			lines = append(lines, cap)
+		}
 		lines = append(lines, userRow("", i, false))
 		lines = append(lines, blankChat())
 	}
@@ -733,6 +767,9 @@ func (m Model) renameScreen() []uiLine {
 }
 
 func (m Model) confirmScreen() []uiLine {
+	if m.confirm.action == "mcpAdd" {
+		return m.mcpAddScreen()
+	}
 	boxW := clamp(m.width-14, 40, 64)
 	if boxW > m.width-2 {
 		boxW = m.width - 2
@@ -873,6 +910,9 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // activityLineText es la línea fija sobre el input: fase, segundos y avisos.
 func (m Model) activityLineText() string {
+	if n := m.activeNotice(); n != "" {
+		return n
+	}
 	if m.compacting {
 		secs := int(time.Since(m.activity.started).Seconds())
 		if m.activity.kind == "" {
@@ -883,14 +923,24 @@ func (m Model) activityLineText() string {
 	if a := m.run.agent; a != nil && a.paused {
 		return fmt.Sprintf("pausado %d/%d (escribe continúa)", a.steps, m.maxSteps())
 	}
+	if m.screen == screenSudo {
+		return "esperando tu contraseña de sudo (esc deniega)"
+	}
+	if m.screen == screenQuestion {
+		return "esperando tu respuesta (1-4 · o otra · esc cancela)"
+	}
 	if m.screen == screenTool {
 		return "esperando tu aprobación (y permitir · n denegar · esc cancela)"
 	}
 	if m.activity.kind == "" {
-		if len(m.queue) > 0 {
-			return fmt.Sprintf("listo · %d mensaje(s) en cola", len(m.queue))
+		pre := ""
+		if n := len(m.attachments); n > 0 {
+			pre = fmt.Sprintf("🖼 %d imagen(es) adjunta(s) (/img clear quita) · ", n)
 		}
-		return "listo"
+		if len(m.queue) > 0 {
+			return pre + fmt.Sprintf("listo · %d mensaje(s) en cola", len(m.queue))
+		}
+		return pre + "listo"
 	}
 	secs := int(time.Since(m.activity.started).Seconds())
 	if secs < 0 {
@@ -935,7 +985,7 @@ func (m Model) activityLineText() string {
 // activityLine pinta la línea fija que va justo encima del campo de entrada.
 func (m Model) activityLine(width int) uiLine {
 	text := m.activityLineText()
-	working := m.activity.kind != "" || m.compacting || m.screen == screenTool
+	working := m.activity.kind != "" || m.run.vault != nil || m.compacting || m.screen == screenTool || m.screen == screenQuestion || m.screen == screenSudo
 	icon := successStyle.Render("●")
 	style := mutedStyle
 	if working {
@@ -943,6 +993,9 @@ func (m Model) activityLine(width int) uiLine {
 		style = textStyle
 	} else if a := m.run.agent; a != nil && a.paused {
 		icon = warningStyle.Render("❚❚")
+	}
+	if m.activeNotice() != "" && m.vaultNoticeErr {
+		icon = warningStyle.Render("⚠")
 	}
 	if text == "" {
 		text = "listo"

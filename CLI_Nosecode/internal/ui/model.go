@@ -28,6 +28,10 @@ const (
 	screenConfirm
 	screenTool
 	screenBashWait
+	screenQuestion
+	screenSudo
+	screenImage
+	screenCatalog
 )
 
 // toolConfirmState pide permiso antes de ejecutar una herramienta MCP.
@@ -56,6 +60,9 @@ type agentRun struct {
 	activeCallID  string
 	hadToolResult bool
 	emptyRetries  int
+	lastCallKey   string
+	callStreak    int
+	resume        bool
 	lastToken     time.Time
 	sawUsage      bool
 }
@@ -156,50 +163,65 @@ type Message = session.Message
 
 // Model es el estado raiz de la TUI.
 type Model struct {
-	cfg          *config.Config
-	width        int
-	height       int
-	screen       screen
-	input        textarea.Model
-	msgs         []Message
-	sessions     []session.Session
-	activeID     string
-	scroll       int
-	toast        string
-	toastErr     bool
-	quit         bool
-	mode         string
-	plan         string
-	hoverBox     hitBox
-	tip          int
-	settings     settings
-	palette      palette
-	rename       renameState
-	confirm      confirmState
-	hit          *hitStore
-	run          runState
-	mcp          *mcp.Manager
-	mcpTools     []mcp.Tool
-	mcpErrs      []string
-	mcpLoading   bool
-	mcpInFlight  bool
-	quota        quotaState
-	tool         toolConfirmState
-	bashWait     bashWaitState
-	sel          selectState
-	buf          *screenBuffer
-	slashMenu    slashState
-	activity     activityState
-	contextWin   int
-	usageTotal   int
-	usageValid   bool
-	ctxWarned    bool
-	lastServer   string
-	lastServerAt time.Time
-	tunnelState  string
-	tunnelBusy   bool
-	tunnelAt     time.Time
-	queue        []string
+	cfg              *config.Config
+	width            int
+	height           int
+	screen           screen
+	input            textarea.Model
+	msgs             []Message
+	sessions         []session.Session
+	activeID         string
+	scroll           int
+	toast            string
+	toastErr         bool
+	quit             bool
+	mode             string
+	plan             string
+	question         questionState
+	mcpPending       *mcpPendingAdd
+	showThink        bool
+	sudo             sudoState
+	attachments      []string
+	catalog          catalogState
+	vaultCmd         string
+	vaultQuiet       bool
+	vaultLog         []string
+	vaultNotice      string
+	vaultNoticeErr   bool
+	vaultNoticeUntil time.Time
+	imgView          imgViewState
+	sudoPW           string // solo memoria; nunca se guarda ni se envía
+	sudoUntil        time.Time
+	hoverBox         hitBox
+	tip              int
+	settings         settings
+	palette          palette
+	rename           renameState
+	confirm          confirmState
+	hit              *hitStore
+	run              runState
+	mcp              *mcp.Manager
+	mcpTools         []mcp.Tool
+	mcpErrs          []string
+	mcpLoading       bool
+	mcpInFlight      bool
+	quota            quotaState
+	tool             toolConfirmState
+	bashWait         bashWaitState
+	sel              selectState
+	buf              *screenBuffer
+	slashMenu        slashState
+	activity         activityState
+	contextWin       int
+	usageTotal       int
+	usageValid       bool
+	ctxWarned        bool
+	lastServer       string
+	lastServerAt     time.Time
+	tunnelState      string
+	tunnelBusy       bool
+	tunnelAt         time.Time
+	queue            []string
 
 	compacting       bool
 	compactingCancel context.CancelFunc
@@ -341,6 +363,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case vaultMsg:
 		return m.onVault(msg)
+	case noticeExpireMsg:
+		return m, nil
 	case quotaMsg:
 		return m.onQuota(msg), nil
 	case quotaTickMsg:
@@ -389,6 +413,16 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelAll()
 		return m, tea.Quit
 	}
+	if key == "ctrl+v" && m.screen == screenChat {
+		if nm, ok := m.pasteImageKey(); ok {
+			return nm, nil
+		}
+	}
+	if key == "ctrl+g" && m.screen == screenChat {
+		if list := m.lastChatImages(); len(list) > 0 {
+			return m.openImageView(list, len(list)-1), nil
+		}
+	}
 	if key == "ctrl+c" {
 		// En una terminal, ctrl+c se usa para copiar. No debe cerrar Nosecode.
 		if m.sel.active || m.sel.moved {
@@ -406,6 +440,14 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toolKey(k)
 	case screenBashWait:
 		return m.bashWaitKey(k)
+	case screenQuestion:
+		return m.questionInput(k)
+	case screenSudo:
+		return m.sudoInput(k)
+	case screenImage:
+		return m.imageKey(k)
+	case screenCatalog:
+		return m.catalogKey(k)
 	}
 
 	switch key {
@@ -423,6 +465,10 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cfg.UI.Sidebar = !m.cfg.UI.Sidebar
 		m = m.saveCfg()
 		m.toast = "Barra lateral: " + onOff(m.cfg.UI.Sidebar)
+		return m, nil
+	case "ctrl+t":
+		m.showThink = !m.showThink
+		m.layout()
 		return m, nil
 	case "ctrl+o":
 		return m.toggleToolBlock(""), nil
@@ -454,7 +500,7 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openConfirmDelete(m.activeID), nil
 	case "ctrl+e":
 		if m.plan != "" {
-			return m.approvePlan(), nil
+			return m.approvePlan()
 		}
 		m.toast = "No hay un plan pendiente"
 		return m, nil
@@ -652,6 +698,19 @@ func (m Model) activate(action, arg string) (tea.Model, tea.Cmd) {
 		return m.toolKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	case "toolToggle":
 		return m.toggleToolBlock(arg), nil
+	case "catalogPick":
+		if i, err := strconv.Atoi(arg); err == nil && i >= 0 && i < len(config.Presets) {
+			m.catalog.cursor = i
+			return m.startEditPreset(config.Presets[i]), nil
+		}
+		return m, nil
+	case "imgOpen":
+		parts := strings.SplitN(arg, ":", 2)
+		if mi, err := strconv.Atoi(parts[0]); err == nil && mi >= 0 && mi < len(m.msgs) && len(parts) == 2 {
+			ii, _ := strconv.Atoi(parts[1])
+			return m.openImageView(m.msgs[mi].Images, ii), nil
+		}
+		return m, nil
 	case "bashContinue":
 		return m.continueBashWait()
 	case "bashCancel":
@@ -667,7 +726,7 @@ func (m Model) activate(action, arg string) (tea.Model, tea.Cmd) {
 	case "mode":
 		return m.toggleMode(), nil
 	case "approvePlan":
-		return m.approvePlan(), nil
+		return m.approvePlan()
 	case "settings":
 		return m.openSettings(0), nil
 	case "closeSettings":
@@ -752,9 +811,29 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.scroll = 0
 
+	// Rutas de imágenes (arrastrar un archivo a la terminal) → adjuntos.
+	if !strings.HasPrefix(strings.ToLower(text), "/img") {
+		if clean, paths := extractImagePaths(text); len(paths) > 0 {
+			var err error
+			for _, p := range paths {
+				if m, err = m.attachFile(p); err != nil {
+					m.toast, m.toastErr = err.Error(), true
+					break
+				}
+			}
+			text = strings.TrimSpace(clean)
+			if text == "" {
+				text = "Mira esta imagen."
+			}
+		}
+	}
+
 	if strings.HasPrefix(text, "/") {
 		if cmd, ok := vaultCommand(text); ok {
 			return m.startVault(cmd)
+		}
+		if strings.EqualFold(strings.Fields(text)[0], "/init") {
+			return m.initStart()
 		}
 		if strings.EqualFold(strings.Fields(text)[0], "/compact") {
 			return m.compactStart()
@@ -767,7 +846,8 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.msgs = append(m.msgs, Message{Role: "user", Text: text})
+	m.msgs = append(m.msgs, Message{Role: "user", Text: text, Images: m.attachments})
+	m.attachments = nil
 	m = m.addContextEstimate(text)
 	if m.mode == "plan" {
 		m.plan = text
@@ -881,6 +961,9 @@ func (m Model) slash(text string) Model {
 			m.toast = "Modelo: " + rest
 		}
 	case "/vault":
+		if strings.EqualFold(rest, "log") {
+			return m.vaultLogSlash()
+		}
 		if strings.EqualFold(rest, "status") {
 			nm, _ := m.startVault("status")
 			return nm
@@ -892,6 +975,16 @@ func (m Model) slash(text string) Model {
 		return m.copyCommand(rest)
 	case "/mcp":
 		return m.mcpSlash(rest)
+	case "/providers", "/ia", "/proveedores":
+		return m.providersSlash(rest)
+	case "/img", "/imagen":
+		return m.imgSlash(rest)
+	case "/export":
+		return m.exportSlash()
+	case "/undo", "/redo":
+		return m.undoSlash(cmd, rest)
+	case "/thinking", "/pensar":
+		return m.thinkingSlash(rest)
 	case "/tools":
 		return m.toolsSlash(rest)
 	case "/agent":
@@ -998,23 +1091,27 @@ func (m Model) toggleMode() Model {
 	return m.setMode("plan")
 }
 
-// approvePlan pasa a Build y registra la aprobacion del plan pendiente.
-func (m Model) approvePlan() Model {
+// approvePlan pasa a Build y le pide al agente que ejecute el plan propuesto.
+func (m Model) approvePlan() (Model, tea.Cmd) {
 	if m.plan == "" {
 		m.toast = "No hay un plan pendiente"
-		return m
+		return m, nil
 	}
-	prompt := m.plan
+	if m.run.busy() || m.compacting {
+		m.toast = "Espera a que termine el plan o pulsa esc"
+		return m, nil
+	}
 	m.plan = ""
 	m = m.setMode("build")
-	m.msgs = append(m.msgs, Message{
-		Role: "assistant",
-		Text: "Plan aprobado. Modo Build activo.\n\n" + m.assistantReply(prompt),
-	})
-	m = m.saveActive()
 	m.toast = "Plan aprobado · modo Build"
+	m.msgs = append(m.msgs, Message{Role: "user", Text: "Plan aprobado. Ejecútalo paso a paso y avísame al terminar."})
+	m = m.saveActive()
 	m.layout()
-	return m
+	if m.providerReady() {
+		return m.startAgent()
+	}
+	m.msgs = append(m.msgs, Message{Role: "assistant", Text: "Plan aprobado. Conecta un proveedor para ejecutarlo."})
+	return m, nil
 }
 
 // ---------------------------------------------------------- sesiones ---
@@ -1144,6 +1241,9 @@ func (m Model) openConfirmDown() Model {
 }
 
 func (m Model) confirmConfirmed() (tea.Model, tea.Cmd) {
+	if m.confirm.action == "mcpAdd" {
+		return m.mcpAddConfirmed(), nil
+	}
 	if m.confirm.action == "vaultDown" {
 		m.screen = screenChat
 		return m.startVault("down")
@@ -1155,6 +1255,7 @@ func (m Model) confirmKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc", "n":
 		m.screen = screenChat
+		m.mcpPending = nil
 		return m, nil
 	case "enter", "y":
 		return m.confirmConfirmed()
@@ -1414,7 +1515,13 @@ func (m Model) warnContext() Model {
 	if m.ctxWarned {
 		return m
 	}
-	if pct := m.contextPercent(); pct >= 80 {
+	pct := m.contextPercent()
+	win := m.contextWin
+	if win <= 0 {
+		win = m.effectiveContextWindow()
+	}
+	reserved := m.cfg.Tools.CompactReserved
+	if pct >= 80 || (win > 0 && reserved > 0 && m.contextUsed() >= win-reserved) {
 		m.ctxWarned = true
 		if !m.toastErr {
 			m.toast = "Contexto al " + strconv.Itoa(pct) + "% · usa /compact para resumir"
@@ -1482,7 +1589,13 @@ var helpText = strings.Join([]string{
 	"  /copy          copiar la última respuesta completa",
 	"  /copy code [n] copiar un bloque de código",
 	"  /copy files    guardar los bloques en ~/.nosecode/copies",
-	"  /mcp        servidores MCP: import, tools, on/off",
+	"  /mcp        servidores MCP: add, remove, import, tools, on/off",
+	"  /thinking   razonamiento del modelo: on|off|auto|show|hide (ctrl+t)",
+	"  /init       el agente crea AGENTS.md del proyecto",
+	"  /providers  catálogo de IAs (ChatGPT, Claude, Gemini, DeepSeek, Groq…) con enlace a su clave",
+	"  /img        adjuntar imagen: /img ruta · /img (portapapeles) · arrastra un archivo · ctrl+g amplía",
+	"  /export     guardar la conversación en Markdown (~/.nosecode/exports)",
+	"  /undo       deshacer el último write/edit del agente (list, force); /redo",
 	"  /agent      activar o desactivar herramientas MCP",
 	"  /config     ruta del config",
 	"  /new        nueva sesión",

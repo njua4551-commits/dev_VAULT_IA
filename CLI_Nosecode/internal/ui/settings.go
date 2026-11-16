@@ -96,6 +96,7 @@ func (m Model) settingRows() []settingRow {
 		}
 		row("provider", name, value, name)
 	}
+	row("catalog", "Catálogo: ChatGPT, Claude, Gemini, DeepSeek…", "", "")
 	row("new", "Nuevo proveedor", "", "")
 	row("import", "Importar del Vault", "", "")
 
@@ -212,6 +213,8 @@ func (m Model) activateSetting() (tea.Model, tea.Cmd) {
 		return m.cyclePermission(row.arg), nil
 	case "provider":
 		return m.startEdit(row.arg, false), nil
+	case "catalog":
+		return m.openCatalog(), nil
 	case "new":
 		return m.startEdit("", true), nil
 	case "import":
@@ -356,6 +359,7 @@ func (m Model) startEdit(name string, isNew bool) Model {
 		fields[i] = ti
 	}
 	fields[0].Focus()
+	maskKeyField(fields)
 	m.settings.fields = fields
 	m.settings.field = 0
 	m.settings.editing = true

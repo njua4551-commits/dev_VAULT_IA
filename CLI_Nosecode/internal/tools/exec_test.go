@@ -35,7 +35,7 @@ func TestBashDetectaPromptYNoCuelga(t *testing.T) {
 		"command":   "echo '[sudo] password for test:'; sleep 30",
 		"timeout_s": 30,
 	}))
-	if !res.Error || !strings.Contains(res.Text, "necesita contraseña") {
+	if !res.Error || !strings.Contains(res.Text, "espera una respuesta interactiva") {
 		t.Fatalf("resultado = %q", res.Text)
 	}
 	if time.Since(start) > 5*time.Second {

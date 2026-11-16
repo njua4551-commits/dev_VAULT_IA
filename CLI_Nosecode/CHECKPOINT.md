@@ -3,6 +3,69 @@
 Estado guardado en disco. El código compila, pasa `go vet` y `go test ./...`.
 Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 
+## 0.9.0 — 2026-11-15 (imágenes, catálogo de IAs, avisos)
+
+- **Imágenes del usuario** (`ui/attach.go`, `images/ansi.go`): `/img <ruta>`, `/img` (portapapeles: wl-paste, xclip o
+  PowerShell), ctrl+v con imagen en el portapapeles, o arrastrar el archivo a la terminal (se detecta la ruta, con
+  comillas, `\ ` o `file://`). Se reducen a JPEG ≤1024 px en `~/.nosecode/chat-images` (la sesión guarda solo la
+  ruta, `Message.Images`). En el chat sale una **miniatura** de medios bloques ▀ a color verdadero (30×8) que se
+  **amplía** con clic o ctrl+g (visor: ←/→ cambia, +/- tamaño, esc cierra). Al modelo viajan solo las imágenes de los
+  2 últimos mensajes (ahorra contexto); máximo 4 por mensaje.
+- **Catálogo de proveedores** (`config/catalog.go`, `ui/providers.go`): `/providers` o Ajustes → Proveedores →
+  «Catálogo». Gemini, Claude, ChatGPT, DeepSeek, OpenRouter, Groq, Cerebras, GitHub Models, Mistral, xAI, NVIDIA,
+  Ollama y LM Studio, con URL, modelo y contexto ya puestos y el enlace para conseguir la clave (varios con plan
+  gratis). La clave se oculta (••••) al escribirla. Los modelos cambian: son editables.
+  Para servicios en la nube (`config.IsCloudURL`) NO se envían `max_tokens` calculado ni `chat_template_kwargs`
+  (solo para llama.cpp/Vault), porque esas APIs son estrictas.
+- **Avisos**: `/up` y `/down` ya no escriben en el chat; el avance sale en la línea de actividad (`ui/notice.go`) y
+  termina con «✓ IA encendida y lista» / «✓ IA apagada» (caduca a los 8 s). Errores en rojo. `/vault log` muestra la
+  bitácora completa a pedido. `/urls` y `/vault status` siguen mostrando su salida en el chat.
+- Pendiente de probar en vivo: miniaturas en tu terminal (necesita color verdadero), ctrl+v con captura real,
+  y cada proveedor con una clave real (no se probó ninguno contra su API).
+
+## 0.8.0 — 2026-11-15 (como un CLI de pago)
+
+- **sudo con contraseña desde la TUI** (`tools/sudo.go`, `ui/sudo.go`): cualquier `sudo` pide primero aprobación
+  (siempre, aunque bash esté en «permitir») y luego un modal con la contraseña enmascarada. Va a sudo por stdin
+  (`sudo -S -p ''`), vive solo en memoria 5 min, se tapa con •••• en cualquier salida y nunca llega al modelo,
+  a disco ni a debug.log. Si sudo la rechaza se olvida. Solo Linux/macOS; en Windows no aplica.
+- **Diff con colores** en write_file/edit_file (`tools/diff.go`, `Result.Diff`, `ToolBlock.Diff`): `+N −M`,
+  rojo/verde, 12 líneas (ctrl+o amplía). El diff es solo visual; el modelo no lo recibe.
+- **Herramienta `todo`** (`tools/todo.go`, `ui/todos.go`): lista de tareas del agente, visible en la barra
+  lateral («Tareas 2/5»). Permitida en Plan. Ayuda a que modelos pequeños no pierdan el hilo.
+- **/export**: conversación a Markdown en `~/.nosecode/exports` (sin razonamiento, con claves ocultas).
+- Prompt: regla de sudo actualizada (nunca pedir la contraseña en el chat) y regla de `todo`.
+- Probado con un `sudo` falso en tests; falta probarlo con sudo real en CachyOS.
+
+## 0.7.1 — 2026-11-15 (pensado para modelos más livianos)
+
+- `tools/repair.go`: sinónimos de herramientas (`run`→bash, `read`→read_file…), prefijos (`functions.`),
+  alias de argumentos (`cmd`→command, `file_path`→path…) y JSON roto (comas, comillas, ``` ) se corrigen solos.
+- Guarda de bucles: la misma llamada 3 veces seguidas se bloquea con un mensaje que dice cambiar de enfoque.
+- `/undo [list|force]` y `/redo` para write_file/edit_file (`tools/undo.go`); no cubre cambios hechos por bash.
+- `ARQUITECTURA.md`: mapa de archivos y recetas para que un asistente no tenga que leer todo el código.
+- Ideas siguientes: autocompactar al llegar al colchón, `/share`, modelo pequeño para títulos.
+
+## 0.7.0 — 2026-11-15 (estilo opencode para un modelo local)
+
+Hecho en bloques con pruebas; cada bloque es un commit.
+
+- **A1** bloques de herramienta con estado, línea de actividad, vigilante de 45 s, cola.
+- **A2** esc cancela de verdad, `timeout_s` de bash con «seguir/cancelar», `/status`, debug.log por herramienta.
+- **B** delimitadores de web_fetch escapados; `NOSECODE_HOME` y debug.log tratados como sensibles.
+- **C1** `permissions.bash_rules` (primera coincidencia gana; solo lista cerrada de solo lectura se auto-aprueba,
+  nunca con metacaracteres de shell); Plan = agente de solo lectura (ctrl+e aprueba y ejecuta en Build);
+  herramienta nativa `question` (modal 1-4 u otra respuesta). Código: `internal/tools/bashpolicy.go`,
+  `internal/tools/question.go`, `internal/ui/plan.go`.
+- **C2** `tools.compact_reserved` (8192): aviso de contexto, `max_tokens` = lo que queda de ventana;
+  carga `NOSECODE.md` + `AGENTS.md` del proyecto + `~/.nosecode/AGENTS.md` (tope 16 KB);
+  herramienta inexistente → error con la lista de disponibles; prompt de tareas acotadas. `internal/ui/instructions.go`.
+- **Razonamiento** `reasoning_content` se muestra plegado (ctrl+t), `/thinking on|off|auto` envía
+  `chat_template_kwargs.enable_thinking`; nunca se reenvía al modelo. `internal/ui/thinking.go`.
+- **/init** el agente crea AGENTS.md. **/mcp add|remove** con confirmación del comando exacto (`internal/ui/mcpadd.go`).
+- Sin hacer (ideas opencode): `/undo`, `/share`, subagentes, modelo pequeño para títulos.
+- Pendiente de probar en vivo con el modelo de Kaggle: Plan sin escritura, modal `question`, bloque de razonamiento.
+
 ## Seguridad de herramientas 0.6.0 — 2026-11-12
 
 - Punto 1: `permissions.read` (`ask` por defecto) y rutas sensibles canónicas

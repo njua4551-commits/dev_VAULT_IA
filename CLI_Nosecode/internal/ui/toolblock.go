@@ -8,6 +8,7 @@ import (
 
 	"nosecode/internal/api"
 	"nosecode/internal/session"
+	"nosecode/internal/tools"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -114,6 +115,23 @@ func (m Model) activeToolBlock() *session.ToolBlock {
 
 // callNeedsApproval decide si una sola llamada debe pasar por el modal.
 func (m Model) callNeedsApproval(call api.ToolCall) bool {
+	if cmd, ok := bashCommand(call); ok && tools.UsesSudo(cmd) && !m.planDenied(call.Function.Name) {
+		if d, _ := m.bashDecision(call); d != "deny" {
+			return true // sudo siempre pide permiso, aunque bash esté en "permitir"
+		}
+	}
+	if m.planDenied(call.Function.Name) {
+		return false // se denegará al ejecutar
+	}
+	if shortTool(call.Function.Name) == "question" {
+		return false
+	}
+	if _, isBash := bashCommand(call); isBash {
+		switch d, _ := m.bashDecision(call); d {
+		case "allow", "deny":
+			return false
+		}
+	}
 	if cat, ok := approvalCategory(call.Function.Name); ok && !m.approvalAllowed(cat) {
 		return true
 	}
@@ -222,11 +240,15 @@ func (m Model) toolBlockLines(msgIdx int, b *session.ToolBlock, width int) []uiL
 		avail = 16
 	}
 	blank := uiLine{panel: "chat", panelX0: 0, panelX1: width}
+	var rowS func(text string, style lipgloss.Style) uiLine
 	row := func(text string, faint bool) uiLine {
 		style := textStyle
 		if faint {
 			style = faintStyle
 		}
+		return rowS(text, style)
+	}
+	rowS = func(text string, style lipgloss.Style) uiLine {
 		ln := uiLine{
 			text:     spaces(indent) + style.Render(text),
 			panel:    "chat",
@@ -286,6 +308,9 @@ func (m Model) toolBlockLines(msgIdx int, b *session.ToolBlock, width int) []uiL
 	}
 	lines = append(lines, row("  "+toolStatusLine(b, time.Now()), true))
 
+	if b.Diff != "" && b.Status == toolOK {
+		return append(lines, append(m.diffRows(b, avail, rowS, row), blank)...)
+	}
 	out := strings.TrimRight(sanitizeText(b.Output), "\n")
 	if out != "" {
 		outLines := strings.Split(out, "\n")
@@ -344,4 +369,45 @@ func (m Model) toggleToolBlock(callID string) Model {
 	m.scroll = 0
 	m.layout()
 	return m
+}
+
+// diffRows dibuja el diff de write_file/edit_file: verde añadido, rojo quitado.
+func (m Model) diffRows(b *session.ToolBlock, avail int, rowS func(string, lipgloss.Style) uiLine, row func(string, bool) uiLine) []uiLine {
+	all := strings.Split(strings.TrimRight(sanitizeText(b.Diff), "\n"), "\n")
+	if len(all) == 0 {
+		return nil
+	}
+	var out []uiLine
+	summary := all[0]
+	out = append(out, rowS("  cambios "+summary, successStyle))
+	body := all[1:]
+	limit := 12
+	if b.Expanded {
+		limit = 200
+	}
+	if limit > len(body) {
+		limit = len(body)
+	}
+	for _, ln := range body[:limit] {
+		style := faintStyle
+		switch {
+		case strings.HasPrefix(ln, "+ "), ln == "+":
+			style = successStyle
+		case strings.HasPrefix(ln, "- "), ln == "-":
+			style = dangerStyle
+		case strings.HasPrefix(ln, "@@"):
+			style = faintStyle
+		default:
+			style = textStyle
+		}
+		for _, w := range wrapText(ln, avail-2) {
+			out = append(out, rowS("  "+w, style))
+		}
+	}
+	if len(body) > limit {
+		out = append(out, row(fmt.Sprintf("  … +%d líneas · ctrl+o", len(body)-limit), true))
+	} else if b.Expanded && len(body) > 12 {
+		out = append(out, row("  ctrl+o colapsa", true))
+	}
+	return out
 }

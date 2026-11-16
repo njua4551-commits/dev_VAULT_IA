@@ -107,10 +107,18 @@ func runWriteFile(ctx context.Context, raw json.RawMessage) Result {
 		return errResult("escritura cancelada")
 	default:
 	}
+	prev := ""
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() <= undoMaxBytes {
+		if data, err := os.ReadFile(path); err == nil {
+			prev = string(data)
+		}
+	}
+	done := snapshotBefore(path)
 	if err := atomicWrite(path, []byte(a.Content), 0o644); err != nil {
 		return errResult("no pude escribir %s: %v", path, err)
 	}
-	return Result{Text: fmt.Sprintf("escritos %d bytes en %s", len(a.Content), path)}
+	done()
+	return Result{Text: fmt.Sprintf("escritos %d bytes en %s", len(a.Content), path), Diff: MiniDiff(prev, a.Content)}
 }
 
 func runEditFile(ctx context.Context, raw json.RawMessage) Result {
@@ -151,10 +159,12 @@ func runEditFile(ctx context.Context, raw json.RawMessage) Result {
 		return errResult("el texto aparece %d veces en %s; añade más contexto para que sea único", count, path)
 	}
 	updated := strings.Replace(text, a.Old, a.New, 1)
+	done := snapshotBefore(path)
 	if err := atomicWrite(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return errResult("no pude guardar %s: %v", path, err)
 	}
-	return Result{Text: fmt.Sprintf("reemplazo aplicado en %s (%d → %d bytes)", path, len(text), len(updated))}
+	done()
+	return Result{Text: fmt.Sprintf("reemplazo aplicado en %s (%d → %d bytes)", path, len(text), len(updated)), Diff: MiniDiff(text, updated)}
 }
 
 func runListDir(ctx context.Context, raw json.RawMessage) Result {

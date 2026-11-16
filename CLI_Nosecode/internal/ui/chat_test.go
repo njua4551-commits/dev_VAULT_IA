@@ -188,7 +188,9 @@ func TestComandosVaultPorBarra(t *testing.T) {
 	_ = os.WriteFile(script, []byte("import sys\nprint('fase '+sys.argv[1], flush=True)\nprint('listo')\n"), 0o644)
 	t.Setenv("VAULT_SCRIPT", script)
 
+	// /down: no escribe en el chat; avisa en la línea de actividad.
 	m := newTestModel(t)
+	before := len(m.msgs)
 	m.input.SetValue("/down")
 	nm, cmd := m.submit()
 	m = nm.(Model)
@@ -196,8 +198,23 @@ func TestComandosVaultPorBarra(t *testing.T) {
 		t.Fatal("debia lanzar vault.py")
 	}
 	m = pump(t, m, cmd)
+	if m.run.busy() || len(m.msgs) != before {
+		t.Fatalf("busy=%v mensajes %d→%d: /down no debe escribir en el chat", m.run.busy(), before, len(m.msgs))
+	}
+	if !strings.Contains(m.activeNotice(), "IA apagada") {
+		t.Fatalf("aviso: %q", m.activeNotice())
+	}
+	if len(m.vaultLog) < 2 || !strings.Contains(strings.Join(m.vaultLog, "|"), "fase down") {
+		t.Fatalf("bitácora: %v", m.vaultLog)
+	}
+
+	// /urls (consulta): sí muestra su salida en el chat.
+	m = newTestModel(t)
+	m.input.SetValue("/urls")
+	nm, cmd = m.submit()
+	m = pump(t, nm.(Model), cmd)
 	last := m.msgs[len(m.msgs)-1].Text
-	if m.run.busy() || !strings.HasPrefix(last, vaultTag+"down") || !strings.Contains(last, "fase down") || !strings.Contains(last, "listo") {
+	if m.run.busy() || !strings.HasPrefix(last, vaultTag+"urls") || !strings.Contains(last, "fase urls") {
 		t.Fatalf("busy=%v texto=%q", m.run.busy(), last)
 	}
 }

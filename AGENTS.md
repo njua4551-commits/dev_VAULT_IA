@@ -11,8 +11,14 @@ Guía breve para agentes que trabajen en este repositorio.
 
 ## Estado actual (2026-11-12)
 
-- Nosecode 0.6.0 compila y pasa `go build ./...`, `go vet ./...` y `go test ./...`
+- Nosecode 0.9.0 compila y pasa `go build ./...`, `go vet ./...` y `go test ./...`
   en Linux, y cross-compila para Windows.
+- Lee `CLI_Nosecode/ARQUITECTURA.md` antes de tocar el cliente (mapa de archivos).
+- 0.9.0: imágenes en el chat (miniatura + visor), catálogo de IAs (/providers) y avisos para /up y /down (ver CHECKPOINT.md).
+- 0.8.0: sudo con contraseña desde la TUI, diff en colores, herramienta `todo` y `/export` (ver CHECKPOINT.md).
+- Nosecode 0.7.0 añade: reglas de bash por patrón, Plan de solo lectura, herramienta `question`,
+  `compact_reserved`, carga de AGENTS.md, razonamiento plegable (`/thinking`, ctrl+t), `/init`
+  y `/mcp add|remove`. Detalle y archivos en `CLI_Nosecode/CHECKPOINT.md` (sección 0.7.0).
 - Herramientas nativas activas por defecto; MCP y navegador solo con
   `/tools mcp on` y `/tools browser on`.
 - Seguridad de herramientas: `permissions.read` (ask por defecto) protege
@@ -42,7 +48,7 @@ Guía breve para agentes que trabajen en este repositorio.
   estaba offline en la última prueba).
 - Probar `/compact`, el contador de contexto y `screenshot` con la IA encendida.
 - Refrescar la copia pública `nosecode-public` y repetir el escaneo de secretos.
-- Investigar WordCraft con Nosecode 0.6.0 y confirmar que el resumen automático
+- Investigar WordCraft con Nosecode 0.7.0 y confirmar que el resumen automático
   al llegar al límite funciona con el modelo real.
 
 ## Reglas para agentes

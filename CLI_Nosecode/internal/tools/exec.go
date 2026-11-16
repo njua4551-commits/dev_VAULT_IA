@@ -88,6 +88,18 @@ func parseBashArgs(raw json.RawMessage) (bashArgs, error) {
 }
 
 func runBash(ctx context.Context, raw json.RawMessage) Result {
+	res := runBashInner(ctx, raw)
+	if pw := sudoPassword(ctx); pw != "" {
+		res.Text = strings.ReplaceAll(res.Text, pw, "••••")
+		res.SudoBad = sudoBadPassword(res.Text)
+		if res.SudoBad {
+			res.Text += "\nLa contraseña de sudo fue rechazada. El usuario puede intentarlo de nuevo; no pidas la contraseña en el chat."
+		}
+	}
+	return res
+}
+
+func runBashInner(ctx context.Context, raw json.RawMessage) Result {
 	a, err := parseBashArgs(raw)
 	if err != nil {
 		return errResult("argumentos inválidos: %v", err)
@@ -123,7 +135,15 @@ func runBash(ctx context.Context, raw json.RawMessage) Result {
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = nonInteractiveEnv()
 	cmd.Stdin = nil // sin terminal: sudo y los prompts fallan en vez de colgarse
+	pw := ""
+	if runtime.GOOS != "windows" && UsesSudo(a.Command) {
+		if pw = sudoPassword(ctx); pw != "" {
+			cmd.Args[len(cmd.Args)-1] = rewriteSudo(a.Command)
+			cmd.Stdin = strings.NewReader(sudoStdin(pw))
+		}
+	}
 	var out limitedBuffer
+	out.secret = pw
 	out.max = 8 << 10
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -217,7 +237,7 @@ func interactiveResult(proc *BashProcess, timeoutS int) Result {
 	if text != "" {
 		text += "\n"
 	}
-	text += "Error: el comando necesita contraseña o confirmación; no uses sudo, pídele al usuario que lo ejecute él."
+	text += "Error: el comando espera una respuesta interactiva (confirmación o contraseña que el cliente no puede dar). Usa banderas no interactivas (-y, --yes) o pídele al usuario que lo ejecute él."
 	return Result{Text: text, Error: true, ExitCode: 1, Bytes: len(text), TimeoutS: timeoutS}
 }
 
@@ -304,6 +324,7 @@ type limitedBuffer struct {
 	buf       bytes.Buffer
 	max       int
 	truncated bool
+	secret    string // se oculta en todo lo que se lea (contraseña de sudo)
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
@@ -325,12 +346,19 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 func (b *limitedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.String()
+	return b.redact(b.buf.String())
+}
+
+func (b *limitedBuffer) redact(s string) string {
+	if b.secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, b.secret, "••••")
 }
 
 // Text devuelve el contenido y si se recortó, con un solo bloqueo.
 func (b *limitedBuffer) Text() (string, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.String(), b.truncated
+	return b.redact(b.buf.String()), b.truncated
 }

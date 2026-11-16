@@ -8,6 +8,8 @@ import (
 	"nosecode/internal/api"
 	"nosecode/internal/session"
 
+	"github.com/charmbracelet/lipgloss"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -123,5 +125,23 @@ func TestLineaActividadFijaYVigilante(t *testing.T) {
 	got := m.activityLineText()
 	if !strings.Contains(got, "el modelo no responde hace") || !strings.Contains(got, "túnel OK") {
 		t.Fatalf("vigilante = %q", got)
+	}
+}
+
+func TestDiffRowsVerdeYRojo(t *testing.T) {
+	m := newTestModel(t)
+	b := &session.ToolBlock{Name: "edit_file", Status: toolOK, Diff: "+1 −1\n@@ línea 2 @@\n  a\n- viejo\n+ nuevo\n  z"}
+	var rowS func(string, lipgloss.Style) uiLine
+	rowS = func(s string, st lipgloss.Style) uiLine { return uiLine{text: s} }
+	rows := m.diffRows(b, 60, rowS, func(s string, f bool) uiLine { return uiLine{text: s} })
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.text)
+	}
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{"cambios +1 −1", "- viejo", "+ nuevo"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("falta %q en %q", want, joined)
+		}
 	}
 }

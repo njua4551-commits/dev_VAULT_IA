@@ -144,6 +144,7 @@ type Usage struct {
 // (Err vale nil si fue bien, ErrCanceled si se cancelo, u otro error).
 type Chunk struct {
 	Text      string
+	Reasoning string // razonamiento (reasoning_content), solo para mostrar
 	ToolCalls []ToolCallDelta
 	Usage     *Usage
 	Done      bool
@@ -159,6 +160,8 @@ type Request struct {
 	Messages    []ChatMessage
 	Tools       []ToolDef
 	IdleTimeout time.Duration // maximo sin tokens; 0 usa 120 s
+	MaxTokens   int           // 0 = sin limite explicito
+	Thinking    *bool         // nil = lo que decida el servidor; si no, enable_thinking
 }
 
 const defaultModelIdle = 120 * time.Second
@@ -301,6 +304,12 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 		"messages": r.Messages,
 		"stream":   true,
 	}
+	if r.MaxTokens > 0 {
+		payload["max_tokens"] = r.MaxTokens
+	}
+	if r.Thinking != nil {
+		payload["chat_template_kwargs"] = map[string]any{"enable_thinking": *r.Thinking}
+	}
 	if len(r.Tools) > 0 {
 		payload["tools"] = r.Tools
 		payload["tool_choice"] = "auto"
@@ -344,8 +353,10 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 		var ev struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content    string `json:"content"`
+					Reasoning  string `json:"reasoning_content"`
+					Reasoning2 string `json:"reasoning"`
+					ToolCalls  []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
@@ -402,6 +413,16 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 				})
 			}
 			if !send(Chunk{ToolCalls: calls, Base: base}) {
+				if idleHit.Load() {
+					return got, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
+				}
+				return got, actx.Err()
+			}
+		}
+		if rt := d.Reasoning + d.Reasoning2; rt != "" {
+			got = true
+			touch()
+			if !send(Chunk{Reasoning: rt, Base: base}) {
 				if idleHit.Load() {
 					return got, fmt.Errorf("%w: sin tokens durante %s", ErrModelIdle, idle)
 				}

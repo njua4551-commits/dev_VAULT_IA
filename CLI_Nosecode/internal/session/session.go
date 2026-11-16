@@ -23,6 +23,7 @@ type ToolBlock struct {
 	Args       string    `json:"args,omitempty"`
 	Status     string    `json:"status"`
 	Output     string    `json:"output,omitempty"`
+	Diff       string    `json:"diff,omitempty"` // solo para mostrar
 	DurationMS int64     `json:"duration_ms,omitempty"`
 	ExitCode   int       `json:"exit_code,omitempty"`
 	TimeoutS   int       `json:"timeout_s,omitempty"`
@@ -36,6 +37,10 @@ type Message struct {
 	Role string     `json:"role"`
 	Text string     `json:"text"`
 	Tool *ToolBlock `json:"tool,omitempty"`
+	// Think es el razonamiento del modelo (solo se muestra; nunca se reenvía).
+	Think string `json:"think,omitempty"`
+	// Images son rutas de imágenes que el usuario adjuntó (ya reducidas, en ~/.nosecode/chat-images).
+	Images []string `json:"images,omitempty"`
 }
 
 // Session es una conversacion persistida en ~/.nosecode/sessions.

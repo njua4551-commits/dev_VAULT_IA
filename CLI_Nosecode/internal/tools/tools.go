@@ -28,6 +28,8 @@ type Result struct {
 	TimeoutS int
 	Soft     bool
 	Process  *BashProcess
+	Diff     string // vista previa del cambio para la TUI (no va al modelo)
+	SudoBad  bool   // sudo rechazó la contraseña: la UI debe olvidarla
 }
 
 // Tool describe una herramienta nativa.
@@ -98,6 +100,18 @@ func init() {
 			Description: "Descarga una URL y devuelve texto plano (HTML convertido, máx. 20 KB).",
 			Parameters:  schema(`{"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer"}},"required":["url"],"additionalProperties":false}`),
 			Run:         runWebFetch,
+		},
+		{
+			Name:        "question",
+			Description: "Pregunta al usuario y le ofrece de 2 a 4 opciones; también puede escribir otra respuesta.",
+			Parameters:  schema(`{"type":"object","properties":{"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":4}},"required":["question","options"],"additionalProperties":false}`),
+			Run:         runQuestion,
+		},
+		{
+			Name:        "todo",
+			Description: "Guarda tu lista de tareas del trabajo actual (reemplaza la anterior). Úsala en tareas de varios pasos: una en in_progress a la vez, marca completed al terminar cada una.",
+			Parameters:  schema(`{"type":"object","properties":{"todos":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["content","status"]}}},"required":["todos"],"additionalProperties":false}`),
+			Run:         runTodo,
 		},
 		{
 			Name:        "remember",

@@ -78,7 +78,14 @@ func apiMessages(msgs []Message, plan bool) []api.ChatMessage {
 	if plan {
 		out = append(out, api.ChatMessage{Role: "system", Content: planSystem})
 	}
-	for _, msg := range msgs {
+	withImgs := map[int]bool{}
+	for i, n := len(msgs)-1, 0; i >= 0 && n < keepImagesInCtx; i-- {
+		if msgs[i].Role == "user" && len(msgs[i].Images) > 0 {
+			withImgs[i] = true
+			n++
+		}
+	}
+	for idx, msg := range msgs {
 		if msg.Tool != nil {
 			continue // traza visible: vive en el historial del agente
 		}
@@ -92,7 +99,11 @@ func apiMessages(msgs []Message, plan bool) []api.ChatMessage {
 		if msg.Role == "assistant" && strings.HasPrefix(text, toolTag) {
 			continue // actividad de herramientas: vive en el historial del agente
 		}
-		out = append(out, api.ChatMessage{Role: msg.Role, Content: text})
+		content := any(text)
+		if msg.Role == "user" && len(msg.Images) > 0 {
+			content = userContent(text, msg.Images, withImgs[idx])
+		}
+		out = append(out, api.ChatMessage{Role: msg.Role, Content: content})
 	}
 	return out
 }
@@ -247,6 +258,16 @@ func (m Model) startVault(cmd string) (Model, tea.Cmd) {
 		if py, err = api.FindPython(); err == nil {
 			v := api.RunVault(context.Background(), py, script, cmd)
 			m.run.vault = v
+			m.vaultCmd = cmd
+			if cmd == "up" || cmd == "down" {
+				// Encender/apagar no llena el chat: el avance sale como aviso.
+				m.vaultQuiet, m.vaultLog = true, nil
+				label := map[string]string{"up": "Encendiendo la IA…", "down": "Apagando la IA…"}[cmd]
+				m.notify(label+" (esc cancela)", false, 0)
+				m.layout()
+				return m, waitVault(v)
+			}
+			m.vaultQuiet = false
 			m.msgs = append(m.msgs, Message{Role: "assistant", Text: vaultTag + cmd + "\n"})
 			m.toast, m.toastErr = "vault.py "+cmd+" en curso… (esc cancela)", false
 			m.layout()
@@ -263,7 +284,13 @@ func (m Model) startVault(cmd string) (Model, tea.Cmd) {
 const maxVaultLines = 60
 
 func (m Model) onVault(msg vaultMsg) (tea.Model, tea.Cmd) {
-	if msg.v != m.run.vault || m.run.vault == nil || m.lastIdx() < 0 {
+	if msg.v != m.run.vault || m.run.vault == nil {
+		return m, nil
+	}
+	if m.vaultQuiet {
+		return m.onVaultQuiet(msg)
+	}
+	if m.lastIdx() < 0 {
 		return m, nil
 	}
 	i := m.lastIdx()
@@ -359,6 +386,8 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 		m = m.clearConnecting()
 		m.run.agent = nil
 		m.tool = toolConfirmState{}
+		m.question = questionState{}
+		m.sudo = sudoState{}
 		m.screen = screenChat
 		m = m.stopActivity()
 		m.toast, m.toastErr = "Agente cancelado", false
@@ -375,6 +404,10 @@ func (m Model) cancelBusy() (tea.Model, tea.Cmd) {
 	if m.run.vault != nil {
 		m.run.vault.Cancel()
 		m.run.vault = nil
+		if m.vaultQuiet {
+			m.vaultQuiet = false
+			m.notify("Cancelado: "+vaultLabel(m.vaultCmd), true, 6*time.Second)
+		}
 		m.toast, m.toastErr = "Comando cancelado (la IA en Kaggle puede seguir encendida: usa /down)", false
 	}
 	m = m.saveActive()

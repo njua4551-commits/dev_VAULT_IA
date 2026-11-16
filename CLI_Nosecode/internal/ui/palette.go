@@ -96,7 +96,7 @@ func (m Model) openPalette() Model {
 	if m.plan != "" {
 		items = append(items, paletteItem{
 			label: "Aprobar plan y pasar a Build", category: "Plan pendiente", shortcut: "ctrl+e",
-			keywords: "ejecutar aprobar", action: func(m Model) Model { return m.approvePlan() },
+			keywords: "ejecutar aprobar", action: func(m Model) Model { nm, _ := m.approvePlan(); return nm },
 		})
 	}
 	m.palette.setItems(items)

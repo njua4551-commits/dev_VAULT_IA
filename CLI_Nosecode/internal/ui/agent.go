@@ -114,9 +114,19 @@ const agentSystem = "Eres Nosecode, un agente de terminal con herramientas nativ
 	"8. No ejecutes comandos destructivos sin explicar qué harás y por qué.\n" +
 	"9. Si modificas el propio Nosecode, haz checkpoint con safe-edit.sh (o safe-edit.ps1), " +
 	"compila a un binario nuevo en dist y revierte si fallan go build o go test.\n" +
-	"10. No uses sudo ni comandos interactivos; evita comandos que recorran todo el disco; " +
+	"10. Puedes usar sudo solo si hace falta: el cliente le pedirá la contraseña al usuario en una ventana " +
+	"aparte. NUNCA la pidas ni la escribas en el chat. Usa siempre `sudo comando` sin -S, -A ni pipes de contraseñas. " +
+	"No uses otros comandos interactivos; evita comandos que recorran todo el disco; " +
 	"para trabajos largos pide un timeout_s mayor.\n" +
-	"11. Responde en español, breve y claro. No inventes resultados."
+	"11. Usa question cuando necesites una decisión del usuario: 2 a 4 opciones claras; " +
+	"no lo uses para pedir permiso de herramientas.\n" +
+	"12. No existen subagentes: haz tú el trabajo con las herramientas listadas; si pides una " +
+	"herramienta que no existe recibirás la lista de las disponibles.\n" +
+	"13. Tareas grandes: primero un plan de 3 a 5 pasos y confírmalo con question; después " +
+	"ejecútalo por partes y resume cada unos 8 pasos. No intentes todo de una vez.\n" +
+	"14. En tareas de 3 o más pasos usa todo: escribe la lista, mantén una sola en in_progress y marca " +
+	"completed al terminar cada una. Actualízala antes de seguir con la siguiente.\n" +
+	"15. Responde en español, breve y claro. No inventes resultados."
 
 type mcpReadyMsg struct {
 	manager *mcp.Manager
@@ -134,10 +144,13 @@ type toolDoneMsg struct {
 	timeoutS int
 	soft     bool
 	process  *tools.BashProcess
+	sudoBad  bool
+	diff     string
 }
 
+// useAgent: Plan también usa el agente, pero con herramientas de solo lectura.
 func (m Model) useAgent() bool {
-	return m.mode != "plan"
+	return true
 }
 
 func (m Model) startAgent() (Model, tea.Cmd) {
@@ -171,10 +184,19 @@ func (m Model) resumeAgent() (Model, tea.Cmd) {
 		a.ctx, a.cancel = context.WithCancel(context.Background())
 	}
 	if text := lastUserText(m.msgs); text != "" {
-		a.msgs = append(a.msgs, api.ChatMessage{Role: "user", Content: text})
+		a.msgs = append(a.msgs, api.ChatMessage{Role: "user", Content: userContent(text, lastUserImages(m.msgs), true)})
 	}
 	debuglog.Logf("agent resume steps=0 msgs=%d", len(a.msgs))
 	return m.beginAgent()
+}
+
+func lastUserImages(msgs []Message) []string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Images
+		}
+	}
+	return nil
 }
 
 func lastUserText(msgs []Message) string {
@@ -273,6 +295,8 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 		Messages:    a.msgs,
 		Tools:       defs,
 		IdleTimeout: 120 * time.Second,
+		MaxTokens:   m.localMaxTokens(),
+		Thinking:    m.localThinking(),
 	})
 	a.stream = s
 	a.assistant = ""
@@ -440,6 +464,7 @@ func (m Model) mcpToolByShort(name string) (mcp.Tool, bool) {
 
 func (m Model) apiTools() []api.ToolDef {
 	out := make([]api.ToolDef, 0, len(tools.Builtins())+len(m.mcpTools))
+	plan := m.mode == "plan"
 	appendDef := func(name, description string, schema json.RawMessage) {
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
@@ -457,16 +482,21 @@ func (m Model) apiTools() []api.ToolDef {
 		if !m.nativeToolAllowed(t.Name) {
 			continue
 		}
+		if plan && !planToolAllowed(t.Name) {
+			continue
+		}
 		appendDef(t.Name, t.Description, t.Parameters)
 	}
-	if m.cfg.Tools.Browser && m.cfg.Permissions.MCP != "deny" {
+	if plan {
+		// En Plan no hay navegador ni MCP: solo lectura local y web.
+	} else if m.cfg.Tools.Browser && m.cfg.Permissions.MCP != "deny" {
 		for _, name := range browserToolNames {
 			if t, ok := m.mcpToolByShort(name); ok {
 				appendDef(name, t.Description, t.Schema)
 			}
 		}
 	}
-	if m.cfg.Tools.MCP && m.cfg.Permissions.MCP != "deny" {
+	if !plan && m.cfg.Tools.MCP && m.cfg.Permissions.MCP != "deny" {
 		for _, t := range m.mcpTools {
 			if isBrowserShort(shortTool(t.Wire)) {
 				continue
@@ -499,12 +529,11 @@ func (m Model) apiToolTokens() int { return toolDefsTokens(m.apiTools()) }
 
 func (m Model) systemPrompt() string {
 	prompt := agentSystem
-	data, err := os.ReadFile(tools.MemoryPath())
-	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
-		return prompt
+	if m.mode == "plan" {
+		prompt += planAgentSystem
 	}
-	mem := tools.TruncateText(strings.TrimSpace(string(data)), 8<<10)
-	return prompt + "\n\nMemoria del proyecto (NOSECODE.md):\n" + mem
+	cwd, _ := os.Getwd()
+	return prompt + loadInstructions(cwd, config.Home(), tools.MemoryPath())
 }
 
 func microcompact(msgs []api.ChatMessage, keep int) {
@@ -545,6 +574,13 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 		m.usageValid = true
 		m = m.warnContext()
 	}
+	if c.Reasoning != "" {
+		a.lastToken = time.Now()
+		m.tunnelState = ""
+		m.msgs[i].Think += c.Reasoning
+		m.scroll = 0
+		m.layout()
+	}
 	if c.Text != "" || len(c.ToolCalls) > 0 {
 		a.lastToken = time.Now()
 		m.tunnelState = ""
@@ -568,6 +604,9 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 
 	m = m.stopActivity()
 	a.stream = nil
+	for k := range a.calls {
+		a.calls[k].Function.Name, a.calls[k].Function.Arguments = tools.NormalizeCall(a.calls[k].Function.Name, a.calls[k].Function.Arguments)
+	}
 	a.msgs = append(a.msgs, api.ChatMessage{
 		Role:      "assistant",
 		Content:   a.assistant,
@@ -762,12 +801,47 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		call.ID = fmt.Sprintf("call_%d_%d", a.rounds, a.pendingIdx)
 		a.pending[a.pendingIdx] = call
 	}
-	if !a.beginStep(m.maxSteps()) {
+	resumed := a.resume
+	a.resume = false
+	if !resumed && !a.beginStep(m.maxSteps()) {
 		return m.hitStepLimit(true)
 	}
 	if reason, blocked := a.failures.blockedReason(call.Function.Name); blocked {
 		text := "herramienta no disponible, no la reintentes: " + reason
 		m = m.appendToolResult(call, text, nil, true, 1, 0)
+		a.pendingIdx++
+		return m.executeNextTool()
+	}
+
+	if m.planDenied(call.Function.Name) {
+		debuglog.Logf("plan deny tool=%s", call.Function.Name)
+		m = m.setToolBlock(call.ID, func(b *session.ToolBlock) { b.Status = toolDenied })
+		m = m.appendToolResult(call, "Denegado: el modo Plan es de solo lectura; "+shortTool(call.Function.Name)+" no está permitido. Propón el cambio en el plan y espera la aprobación del usuario.", nil, true, 1, 0)
+		a.pendingIdx++
+		return m.executeNextTool()
+	}
+	if shortTool(call.Function.Name) == "question" {
+		nm, ok := m.startQuestion(call)
+		if !ok {
+			nm.run.agent.pendingIdx++
+			return nm.executeNextTool()
+		}
+		return nm, nil
+	}
+	if _, isBash := bashCommand(call); isBash {
+		if d, why := m.bashDecision(call); d == "deny" {
+			debuglog.Logf("bash deny: %s", why)
+			m = m.setToolBlock(call.ID, func(b *session.ToolBlock) { b.Status = toolDenied })
+			m = m.appendToolResult(call, "Denegado: "+why+". No reintentes este comando; usa otra herramienta o pídele al usuario que lo ejecute.", nil, true, 1, 0)
+			a.pendingIdx++
+			return m.executeNextTool()
+		}
+	}
+
+	if !resumed && loopRepeated(a, call) {
+		debuglog.Logf("loop guard tool=%s", call.Function.Name)
+		m = m.setToolBlock(call.ID, func(b *session.ToolBlock) { b.Status = toolError })
+		m = m.appendToolResult(call, "Error: repetiste la misma llamada 3 veces seguidas sin avanzar. No la repitas: cambia de enfoque, usa otra herramienta, o responde al usuario con lo que sabes y pregunta qué hacer.", nil, true, 1, 0)
 		a.pendingIdx++
 		return m.executeNextTool()
 	}
@@ -795,6 +869,9 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		}
 	}
 
+	if m.needsSudoPassword(call) {
+		return m.startSudoPrompt(call), nil
+	}
 	logBashCalls("exec", []api.ToolCall{call})
 
 	native, isNative := tools.Lookup(call.Function.Name)
@@ -803,7 +880,7 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 		var ok bool
 		wire, ok = m.resolveMCPWire(call.Function.Name)
 		if !ok {
-			m = m.appendToolResult(call, "herramienta no disponible o desactivada; no la reintentes", nil, true, 1, 0)
+			m = m.appendToolResult(call, m.unknownToolMessage(call.Function.Name), nil, true, 1, 0)
 			a.pendingIdx++
 			return m.executeNextTool()
 		}
@@ -827,6 +904,9 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 	if m.cfg.Permissions.WebfetchLocal == "allow" {
 		ctx = tools.WithWebLocal(ctx)
 	}
+	if cmdText, isB := bashCommand(call); isB && tools.UsesSudo(cmdText) && m.sudoCached() {
+		ctx = tools.WithSudoPassword(ctx, m.sudoPW)
+	}
 	mgr := m.mcp
 	servers := m.cfg.MCP.Servers
 	browserTool := isBrowserShort(call.Function.Name)
@@ -837,7 +917,7 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 			res := native.Run(ctx, json.RawMessage(call.Function.Arguments))
 			return toolDoneMsg{call: call, result: nativeResult(res), duration: time.Since(start),
 				exitCode: res.ExitCode, bytes: res.Bytes, timeoutS: res.TimeoutS,
-				soft: res.Soft, process: res.Process}
+				soft: res.Soft, process: res.Process, sudoBad: res.SudoBad, diff: res.Diff}
 		}
 		if mgr == nil {
 			return toolDoneMsg{call: call, err: errors.New("MCP no conectado"), duration: time.Since(start), exitCode: 1}
@@ -992,6 +1072,9 @@ func (m Model) onToolDone(msg toolDoneMsg) (tea.Model, tea.Cmd) {
 	if a == nil {
 		return m, nil
 	}
+	if msg.sudoBad {
+		m = m.forgetSudo()
+	}
 	if msg.soft && msg.process != nil {
 		select {
 		case <-msg.process.Done():
@@ -1056,6 +1139,10 @@ func (m Model) onToolDone(msg toolDoneMsg) (tea.Model, tea.Cmd) {
 		debuglog.Logf("bash done error=%v duration=%s exit=%d bytes=%d", msg.result.Error, msg.duration.Round(time.Millisecond), exitCode, bytes)
 	}
 	m = m.appendToolResult(msg.call, text, parts, msg.result.Error, exitCode, msg.duration)
+	if msg.diff != "" {
+		d := msg.diff
+		m = m.setToolBlock(msg.call.ID, func(b *session.ToolBlock) { b.Diff = d })
+	}
 	a.pendingIdx++
 	return m.executeNextTool()
 }
@@ -1533,6 +1620,18 @@ func oneLine(s string, max int) string {
 
 func (m Model) mcpSlash(rest string) Model {
 	arg := strings.ToLower(strings.TrimSpace(rest))
+	if f := strings.Fields(rest); len(f) > 0 {
+		switch strings.ToLower(f[0]) {
+		case "add", "añadir", "instalar":
+			return m.mcpAdd(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rest), f[0])))
+		case "remove", "rm", "quitar":
+			if len(f) < 2 {
+				m.toast, m.toastErr = "Uso: /mcp remove <nombre>", true
+				return m
+			}
+			return m.mcpRemove(f[1])
+		}
+	}
 	switch arg {
 	case "import", "importar":
 		n, path, err := m.cfg.ImportMCP()
@@ -1541,7 +1640,7 @@ func (m Model) mcpSlash(rest string) Model {
 			m.msgs = append(m.msgs, Message{Role: "assistant", Text: "MCP: " + err.Error()})
 			break
 		}
-		m.closeMCP()
+		m = m.closeMCP()
 		if len(m.cfg.MCP.Servers) > 0 {
 			m.mcpLoading = true
 		}
@@ -1552,13 +1651,13 @@ func (m Model) mcpSlash(rest string) Model {
 		m.cfg.MCP.Enabled = arg == "on"
 		m.saveCfg()
 		if !m.cfg.MCP.Enabled {
-			m.closeMCP()
+			m = m.closeMCP()
 		} else if m.mcp == nil && !m.mcpLoading && len(m.cfg.MCP.Servers) > 0 {
 			m.mcpLoading = true
 		}
 		m.toast = "Agente MCP: " + onOff(m.cfg.MCP.Enabled)
 	case "reload", "recargar":
-		m.closeMCP()
+		m = m.closeMCP()
 		if len(m.cfg.MCP.Servers) > 0 {
 			m.mcpLoading = true
 		}
@@ -1594,10 +1693,10 @@ func (m Model) mcpSlash(rest string) Model {
 				b.WriteString("• " + oneLine(e, 180) + "\n")
 			}
 		}
-		b.WriteString("\n/mcp import · /mcp tools · /mcp on|off · /mcp ask|allow|deny")
+		b.WriteString("\n/mcp add <nombre> <comando> · /mcp remove <nombre> · /mcp import · /mcp tools · /mcp on|off · /mcp ask|allow|deny")
 		m.msgs = append(m.msgs, Message{Role: "assistant", Text: b.String()})
 	default:
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: "Uso: /mcp [import|tools|on|off|reload|ask|allow|deny]"})
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: "Uso: /mcp [add|remove|import|tools|on|off|reload|ask|allow|deny]"})
 	}
 	m = m.saveActive()
 	m.layout()
