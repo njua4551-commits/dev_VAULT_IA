@@ -145,3 +145,29 @@ func TestDiffRowsVerdeYRojo(t *testing.T) {
 		}
 	}
 }
+
+func TestQuestionSeVeComoProsa(t *testing.T) {
+	m := newTestModel(t)
+	m.width = 100
+	b := &session.ToolBlock{
+		Name:   "question",
+		Args:   "{\"question\":\"¿Qué enfoque?\\n```go\\nfunc a() {}\\n```\",\"options\":[\"Opción uno\",\"Opción dos\"]}",
+		Status: toolOK,
+		Output: "El usuario respondió: Opción dos",
+	}
+	var sb strings.Builder
+	for _, l := range m.toolBlockLines(0, b, 100) {
+		sb.WriteString(l.text + "\n")
+	}
+	out := sb.String()
+	for _, want := range []string{"Pregunta", "¿Qué enfoque?", "│ func a() {}", "1) Opción uno", "2) Opción dos", "→ Opción dos"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("falta %q en:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{`"options"`, "líneas", "```"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("no debía contener %q:\n%s", bad, out)
+		}
+	}
+}

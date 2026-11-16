@@ -1462,11 +1462,24 @@ func (m Model) contextEstimate() int {
 	if a := m.run.agent; a != nil && len(a.msgs) > 0 {
 		total := m.apiToolTokens()
 		for _, msg := range a.msgs {
-			total += estimateTokens(messageText(msg))
+			total += estimateTokens(messageText(msg)) + imageTokens(msg)
 		}
 		return total
 	}
 	return estimateTokens(m.systemPrompt()) + estimateTokens(m.plan) + m.tokensValue()
+}
+
+// imageTokens estima el costo de las imágenes de un mensaje (~1000 tokens cada una).
+func imageTokens(msg api.ChatMessage) int {
+	n := 0
+	if parts, ok := msg.Content.([]api.ContentPart); ok {
+		for _, p := range parts {
+			if p.ImageURL != nil {
+				n += 1000
+			}
+		}
+	}
+	return n
 }
 
 func messageText(msg api.ChatMessage) string {

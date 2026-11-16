@@ -266,6 +266,9 @@ func (m Model) toolBlockLines(msgIdx int, b *session.ToolBlock, width int) []uiL
 		return ln
 	}
 
+	if shortTool(b.Name) == "question" {
+		return m.questionBlockLines(b, avail, blank, rowS)
+	}
 	lines := []uiLine{blank}
 	icon := "⚙ "
 	name := b.Name
@@ -410,4 +413,58 @@ func (m Model) diffRows(b *session.ToolBlock, avail int, rowS func(string, lipgl
 		out = append(out, row("  ctrl+o colapsa", true))
 	}
 	return out
+}
+
+// questionBlockLines dibuja la herramienta question como texto legible
+// (pregunta, opciones numeradas y respuesta) en lugar de JSON crudo.
+// Los bloques ``` del texto se muestran con una barra lateral.
+func (m Model) questionBlockLines(b *session.ToolBlock, avail int, blank uiLine, rowS func(string, lipgloss.Style) uiLine) []uiLine {
+	text, opts, err := tools.ParseQuestionArgs(json.RawMessage(b.Args))
+	lines := []uiLine{blank}
+	if err != nil {
+		lines = append(lines, rowS("❓ pregunta no válida", mutedStyle))
+		return append(lines, blank)
+	}
+	lines = append(lines, rowS("❓ Pregunta", primaryStyle))
+	inCode := false
+	for _, ln := range strings.Split(strings.TrimRight(sanitizeText(text), "\n"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			for _, w := range wrapText(ln, avail-4) {
+				lines = append(lines, rowS("  │ "+w, faintStyle))
+			}
+			continue
+		}
+		for _, w := range wrapText(ln, avail-2) {
+			lines = append(lines, rowS("  "+w, textStyle))
+		}
+	}
+	for i, o := range opts {
+		for j, w := range wrapText(o, avail-8) {
+			pre := "     "
+			if j == 0 {
+				pre = fmt.Sprintf("  %d) ", i+1)
+			}
+			lines = append(lines, rowS(pre+w, textStyle))
+		}
+	}
+	switch b.Status {
+	case toolOK:
+		ans := strings.TrimPrefix(strings.TrimSpace(sanitizeText(b.Output)), "El usuario respondió:")
+		for j, w := range wrapText(strings.TrimSpace(ans), avail-6) {
+			pre := "     "
+			if j == 0 {
+				pre = "  → "
+			}
+			lines = append(lines, rowS(pre+w, primaryStyle))
+		}
+	case toolApproval:
+		lines = append(lines, rowS("  esperando tu respuesta…", faintStyle))
+	case toolDenied:
+		lines = append(lines, rowS("  sin respuesta", faintStyle))
+	}
+	return append(lines, blank)
 }

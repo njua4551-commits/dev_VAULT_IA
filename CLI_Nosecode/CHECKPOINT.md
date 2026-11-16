@@ -3,6 +3,12 @@
 Estado guardado en disco. El código compila, pasa `go vet` y `go test ./...`.
 Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 
+## 0.9.1 — contador estable, imágenes nítidas, question en prosa
+
+- **Contador de contexto**: llama.cpp reporta `timings.prompt_n` solo con los tokens nuevos (el resto sale de `cache_n`), por eso el número saltaba. Ahora `api/chat.go` suma `prompt_n + cache_n`, pide `stream_options.include_usage` y `contextEstimate` cuenta ≈1000 tokens por imagen (`imageTokens`). Test: `TestUsageConCacheNoSalta`.
+- **Imágenes**: `images.Thumbnail` usa bloques de cuadrante (2×2 subpíxeles por celda, mejor de 14 máscaras) = el doble de detalle horizontal. Miniatura 48×12, visor casi a pantalla completa y tecla `o` para abrir con el visor del sistema (`openCommand`: xdg-open/open/start). Imagen realmente nítida dentro de la terminal requeriría protocolo kitty/sixel (no implementado).
+- **question**: `toolblock.go` → `questionBlockLines` dibuja pregunta, bloques ``` con barra lateral, opciones numeradas y «→ respuesta», sin JSON crudo.
+
 ## 0.9.0 — 2026-11-15 (imágenes, catálogo de IAs, avisos)
 
 - **Imágenes del usuario** (`ui/attach.go`, `images/ansi.go`): `/img <ruta>`, `/img` (portapapeles: wl-paste, xclip o

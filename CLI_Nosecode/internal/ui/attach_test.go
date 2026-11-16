@@ -109,3 +109,15 @@ func TestLimiteDeAdjuntos(t *testing.T) {
 		t.Fatal("debe respetar el máximo")
 	}
 }
+
+func TestOpenCommand(t *testing.T) {
+	if c := openCommand("linux", "/a/b.jpg"); c[0] != "xdg-open" || c[1] != "/a/b.jpg" {
+		t.Fatal(c)
+	}
+	if c := openCommand("darwin", "/a/b.jpg"); c[0] != "open" {
+		t.Fatal(c)
+	}
+	if c := openCommand("windows", `C:\a b.jpg`); c[0] != "cmd" || c[len(c)-1] != `C:\a b.jpg` {
+		t.Fatal(c)
+	}
+}

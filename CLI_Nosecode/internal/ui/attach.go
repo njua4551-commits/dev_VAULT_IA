@@ -30,8 +30,8 @@ import (
 const (
 	maxAttachments  = 4
 	keepImagesInCtx = 2 // solo las imágenes de los últimos mensajes viajan al modelo
-	thumbCols       = 30
-	thumbRows       = 8
+	thumbCols       = 48
+	thumbRows       = 12
 )
 
 var imageExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true}
@@ -143,6 +143,26 @@ func splitShellish(s string) []string {
 	}
 	flush()
 	return out
+}
+
+// openCommand elige el comando del sistema para abrir un archivo con su app.
+func openCommand(goos, path string) []string {
+	switch goos {
+	case "windows":
+		return []string{"cmd", "/c", "start", "", path}
+	case "darwin":
+		return []string{"open", path}
+	}
+	return []string{"xdg-open", path}
+}
+
+// openExternal abre la imagen con el visor del sistema (nítida, a tamaño real).
+func openExternal(path string) error {
+	c := openCommand(runtime.GOOS, path)
+	if _, err := exec.LookPath(c[0]); err != nil {
+		return fmt.Errorf("no encontré %s; abre a mano %s", c[0], path)
+	}
+	return exec.Command(c[0], c[1:]...).Start()
 }
 
 func isPNG(b []byte) bool { return bytes.HasPrefix(b, []byte("\x89PNG")) }
@@ -337,6 +357,12 @@ func (m Model) imageKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if v.idx < len(v.list)-1 {
 			v.idx++
 		}
+	case "o":
+		if err := openExternal(v.list[v.idx]); err != nil {
+			m.toast, m.toastErr = err.Error(), true
+		} else {
+			m.toast, m.toastErr = "Abierta con tu visor de imágenes", false
+		}
 	case "+", "=":
 		if v.zoom < 100 {
 			v.zoom += 25
@@ -355,8 +381,8 @@ func (m Model) imageScreen() []uiLine {
 	if len(v.list) == 0 {
 		return nil
 	}
-	maxCols := clamp(m.width-10, 20, 120) * v.zoom / 100
-	maxRows := clamp(m.height-10, 6, 50) * v.zoom / 100
+	maxCols := clamp(m.width-8, 20, 220) * v.zoom / 100
+	maxRows := clamp(m.height-8, 6, 90) * v.zoom / 100
 	rows, w, ok := thumb(v.list[v.idx], maxCols, maxRows)
 	boxW := clamp(w+4, 40, m.width-2)
 	head := []uiLine{{text: modalTitleStyle.Render(fmt.Sprintf("Imagen %d/%d · %s", v.idx+1, len(v.list), filepath.Base(v.list[v.idx])))}}
@@ -367,6 +393,6 @@ func (m Model) imageScreen() []uiLine {
 	for _, r := range rows {
 		body = append(body, uiLine{text: r})
 	}
-	footer := "←/→ cambiar · +/- tamaño · esc cerrar"
+	footer := "←/→ cambiar · +/- tamaño · o abrir con tu visor (nítida) · esc cerrar"
 	return m.centerModal(m.modalFrame(boxW, head, body, footer), boxW)
 }

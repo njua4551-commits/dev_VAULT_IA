@@ -304,6 +304,7 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 		"messages": r.Messages,
 		"stream":   true,
 	}
+	payload["stream_options"] = map[string]any{"include_usage": true} // usage exacto (incluye lo cacheado)
 	if r.MaxTokens > 0 {
 		payload["max_tokens"] = r.MaxTokens
 	}
@@ -370,6 +371,7 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 			Usage   *Usage `json:"usage"`
 			Timings *struct {
 				PromptN    int `json:"prompt_n"`
+				CacheN     int `json:"cache_n"` // tokens reutilizados de la caché del prompt
 				PredictedN int `json:"predicted_n"`
 			} `json:"timings"`
 		}
@@ -378,10 +380,13 @@ func streamOne(ctx context.Context, base string, r Request, send func(Chunk) boo
 		}
 		usage := ev.Usage
 		if usage == nil && ev.Timings != nil && (ev.Timings.PromptN > 0 || ev.Timings.PredictedN > 0) {
+			// prompt_n solo cuenta lo que se procesó de nuevo; con la caché del
+			// prompt hay que sumar cache_n o el contador de contexto salta.
+			prompt := ev.Timings.PromptN + ev.Timings.CacheN
 			usage = &Usage{
-				PromptTokens:     ev.Timings.PromptN,
+				PromptTokens:     prompt,
 				CompletionTokens: ev.Timings.PredictedN,
-				TotalTokens:      ev.Timings.PromptN + ev.Timings.PredictedN,
+				TotalTokens:      prompt + ev.Timings.PredictedN,
 			}
 		}
 		if usage != nil {
