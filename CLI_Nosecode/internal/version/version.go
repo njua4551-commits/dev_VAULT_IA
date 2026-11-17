@@ -5,6 +5,6 @@ const Name = "Nosecode"
 
 // Version y Commit se sobreescriben al compilar con -ldflags.
 var (
-	Version = "0.9.1"
+	Version = "0.15.0"
 	Commit  = "dev"
 )

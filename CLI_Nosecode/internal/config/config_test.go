@@ -58,7 +58,7 @@ func TestMaxStepsDefaultYLimite(t *testing.T) {
 	if c.Tools.MaxSteps != DefaultMaxSteps {
 		t.Fatalf("max_steps por defecto = %d", c.Tools.MaxSteps)
 	}
-	if DefaultMaxSteps != 30 || MaxStepsLimit != 100 {
+	if DefaultMaxSteps != 100 || MaxStepsLimit != 300 {
 		t.Fatalf("constantes max_steps = %d/%d", DefaultMaxSteps, MaxStepsLimit)
 	}
 	c.Tools.MaxSteps = 0

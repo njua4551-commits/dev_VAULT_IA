@@ -18,8 +18,8 @@ const (
 	DefaultContextWindow   = 131072
 	DefaultCompactKeep     = 6
 	DefaultCompactReserved = 8192
-	DefaultMaxSteps        = 30
-	MaxStepsLimit          = 100
+	DefaultMaxSteps        = 100
+	MaxStepsLimit          = 300
 )
 
 // ToolSettings controla que herramientas se envían al modelo. Las nativas
@@ -32,6 +32,8 @@ type ToolSettings struct {
 	// CompactReserved son los tokens que se dejan libres para la respuesta:
 	// avisa antes de llenar la ventana y limita max_tokens.
 	CompactReserved int `json:"compact_reserved"`
+	// PersistentShell mantiene un único bash vivo entre comandos (cd, variables, venv).
+	PersistentShell bool `json:"persistent_shell"`
 }
 
 // Provider describe un endpoint compatible con la API de OpenAI.
@@ -86,7 +88,33 @@ type MCPServer struct {
 	URL         string            `json:"url,omitempty"`
 	Headers     map[string]string `json:"headers,omitempty"`
 	Enabled     *bool             `json:"enabled,omitempty"`
-	Timeout     int               `json:"timeout,omitempty"` // milisegundos
+	Timeout     int               `json:"timeout,omitempty"`    // milisegundos
+	Transport   string            `json:"transport,omitempty"`  // "" (HTTP streamable con fallback) | sse
+	Include     []string          `json:"include,omitempty"`    // solo estas herramientas (patrones glob)
+	Exclude     []string          `json:"exclude,omitempty"`    // ocultar estas herramientas
+	Permission  string            `json:"permission,omitempty"` // ask | allow | deny solo para este servidor
+}
+
+// Sandbox aísla los comandos de bash (bubblewrap en Linux, sandbox-exec en
+// macOS). Mode: off | auto | on. Writable: rutas extra con escritura.
+type Sandbox struct {
+	Mode      string   `json:"mode,omitempty"`
+	NoNetwork bool     `json:"no_network,omitempty"`
+	Writable  []string `json:"writable,omitempty"`
+}
+
+// LSP configura los servidores de lenguaje: por extensión (".go") el comando
+// que los arranca. Sin configurar se usan gopls, pyright-langserver,
+// typescript-language-server y rust-analyzer si están en el PATH.
+type LSP struct {
+	Disabled bool                `json:"disabled,omitempty"`
+	Servers  map[string][]string `json:"servers,omitempty"`
+}
+
+// Hooks son comandos del usuario que corren tras ciertos eventos del agente.
+// En after_edit, {file} es la ruta editada: p. ej. "gofmt -l {file}".
+type Hooks struct {
+	AfterEdit []string `json:"after_edit,omitempty"`
 }
 
 // MCP guarda los servidores de herramientas del agente.
@@ -116,6 +144,9 @@ type Config struct {
 	UI              UI                  `json:"ui"`
 	Tools           ToolSettings        `json:"tools"`
 	MCP             MCP                 `json:"mcp"`
+	Hooks           Hooks               `json:"hooks"`
+	LSP             LSP                 `json:"lsp"`
+	Sandbox         Sandbox             `json:"sandbox"`
 
 	// Path es la ruta desde la que se cargo (no se escribe en el JSON).
 	Path string `json:"-"`
@@ -168,7 +199,7 @@ func Defaults() *Config {
 			Read:          "ask",
 			MCP:           "ask",
 		},
-		Tools: ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps, CompactReserved: DefaultCompactReserved},
+		Tools: ToolSettings{CompactKeep: DefaultCompactKeep, MaxSteps: DefaultMaxSteps, CompactReserved: DefaultCompactReserved, PersistentShell: true},
 		MCP:   MCP{Servers: map[string]MCPServer{}},
 		UI: UI{
 			Theme:      "vercel",
@@ -290,6 +321,9 @@ func (c *Config) normalize() {
 	}
 	if c.Tools.CompactReserved <= 0 {
 		c.Tools.CompactReserved = DefaultCompactReserved
+	}
+	if c.Tools.MaxSteps == 30 { // antiguo valor por defecto: ahora 100 sin pausas
+		c.Tools.MaxSteps = DefaultMaxSteps
 	}
 	if c.Tools.MaxSteps <= 0 {
 		c.Tools.MaxSteps = DefaultMaxSteps

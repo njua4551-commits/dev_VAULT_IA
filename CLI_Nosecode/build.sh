@@ -5,7 +5,7 @@ set -eu
 cd "$(dirname "$0")"
 mkdir -p dist
 
-VERSION="${VERSION:-0.9.1}"
+VERSION="${VERSION:-0.15.0}"
 LDFLAGS="-s -w -X nosecode/internal/version.Version=${VERSION} -X nosecode/internal/version.Commit=build"
 
 echo "Nosecode: compilando..."

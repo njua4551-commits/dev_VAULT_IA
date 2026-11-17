@@ -68,8 +68,9 @@ func (p *BashProcess) Kill() {
 }
 
 type bashArgs struct {
-	Command  string `json:"command"`
-	TimeoutS int    `json:"timeout_s"`
+	Command    string `json:"command"`
+	TimeoutS   int    `json:"timeout_s"`
+	Background bool   `json:"background"`
 }
 
 func parseBashArgs(raw json.RawMessage) (bashArgs, error) {
@@ -108,6 +109,14 @@ func runBashInner(ctx context.Context, raw json.RawMessage) Result {
 		return errResult("el comando está vacío")
 	}
 
+	if PersistentShellOn() && !a.Background && !UsesSudo(a.Command) {
+		proc, err := persistentStart(a.Command)
+		if err != nil {
+			return errResult("%v", err)
+		}
+		return awaitBash(ctx, a, proc)
+	}
+
 	var name string
 	var args []string
 	if runtime.GOOS == "windows" {
@@ -126,7 +135,17 @@ func runBashInner(ctx context.Context, raw json.RawMessage) Result {
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	if mode, active, _ := SandboxState(); mode != "off" && UsesSudo(a.Command) && (active || mode == "on") {
+		return errResult("sudo no funciona dentro del sandbox. Pídele al usuario que ejecute ese comando él mismo o que use /sandbox off.")
+	}
+	name, args, _, werr := sandboxWrap(name, args)
+	if werr != nil {
+		return errResult("%v", werr)
+	}
+
+	// El proceso no muere con el contexto de la herramienta: así puede pasar a
+	// segundo plano. La cancelación se atiende abajo (ctx.Done → Kill).
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), name, args...)
 	prepareCommand(cmd)
 	cmd.Cancel = func() error {
 		killCommand(cmd)
@@ -158,14 +177,26 @@ func runBashInner(ctx context.Context, raw json.RawMessage) Result {
 		}
 	}
 	proc := &BashProcess{cmd: cmd, out: &out, done: make(chan struct{}), start: start}
+	trackLive(proc)
 	go func() {
 		err := cmd.Wait()
+		untrackLive(proc)
 		proc.mu.Lock()
 		proc.err = err
 		proc.mu.Unlock()
 		close(proc.done)
 	}()
 
+	if a.Background {
+		return backgroundResult(ctx, proc, a.Command)
+	}
+	return awaitBash(ctx, a, proc)
+}
+
+// awaitBash espera al proceso con timeout suave, cancelación y detección de
+// preguntas interactivas. Lo comparten el modo normal y el shell persistente.
+func awaitBash(ctx context.Context, a bashArgs, proc *BashProcess) Result {
+	out := proc.out
 	deadline := time.NewTimer(time.Duration(a.TimeoutS) * time.Second)
 	defer deadline.Stop()
 	ticker := time.NewTicker(300 * time.Millisecond)
@@ -178,7 +209,7 @@ func runBashInner(ctx context.Context, raw json.RawMessage) Result {
 		case <-ctx.Done():
 			proc.Kill()
 			<-proc.done
-			text := bashText(&out)
+			text := bashText(out)
 			if text != "" {
 				text += "\n"
 			}
@@ -203,7 +234,7 @@ func runBashInner(ctx context.Context, raw json.RawMessage) Result {
 				return interactiveResult(proc, a.TimeoutS)
 			}
 			// Timeout suave: no matar; devolver la salida parcial y el proceso.
-			text := bashText(&out)
+			text := bashText(out)
 			return Result{
 				Text:     text,
 				Bytes:    len(text),
@@ -295,6 +326,9 @@ func bashText(out *limitedBuffer) string {
 func exitCodeOf(err error) int {
 	if err == nil {
 		return 0
+	}
+	if es, ok := err.(exitStatus); ok {
+		return int(es)
 	}
 	var ee *exec.ExitError
 	if ok := asExitError(err, &ee); ok {

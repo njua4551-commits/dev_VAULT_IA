@@ -4,10 +4,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"nosecode/internal/config"
 	"nosecode/internal/console"
+	"nosecode/internal/lsp"
+	"nosecode/internal/tools"
 	"nosecode/internal/ui"
 	"nosecode/internal/version"
 
@@ -18,6 +22,8 @@ const help = `Nosecode: cliente de terminal para modelos OpenAI-compatibles
 
 Uso:
   nosecode                 abre la interfaz
+  nosecode run "tarea"     ejecuta una tarea sin interfaz (--yes, --read-only,
+                           --json; ver nosecode run --help)
   nosecode --demo[=pantalla] imprime una pantalla sin TTY
                            pantallas: home, session, settings,
                            settings-edit, palette
@@ -39,6 +45,10 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nosecode: %v\n", err)
 		os.Exit(1)
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "run" {
+		os.Exit(runCommand(cfg, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 
 	for _, arg := range os.Args[1:] {
@@ -66,6 +76,17 @@ func main() {
 	}
 
 	p := tea.NewProgram(ui.New(cfg), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	defer tools.KillJobs()
+	// Terminal cerrada (SIGHUP) o kill (SIGTERM): no dejar procesos huérfanos.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		tools.KillJobs()
+		lsp.Default.CloseAll()
+		os.Exit(1)
+	}()
+	defer lsp.Default.CloseAll()
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "nosecode: %v\n", err)
 		os.Exit(1)

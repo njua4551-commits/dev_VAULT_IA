@@ -135,7 +135,7 @@ cambiar. En la paleta, escribe para filtrar y `enter` para ejecutar.
 `/settings`, `/model [nombre]`, `/sessions`, `/copy [code [n]|files]`,
 `/tokens`, `/sound`, `/theme`, `/tools [browser|mcp] on|off`,
 `/tools max_steps N`, `/compact`,
-`/mcp`, `/agent`, `/vault`, `/up`, `/down`,
+`nosecode run "tarea"` (sin interfaz), `/sandbox`, `/shell` (shell persistente), `/terminal` (PTY interactivo), `/map`, `/commit`, `/mcp` (list, add, remove, test, doctor, enable, disable, filter, perm, import), `/check [cmd]`, `/commands`, `/agent`, `/vault`, `/up`, `/down`,
 `/urls`, `/status`, `/config`, `/new`, `/help`, `/quit`.
 
 `/copy` copia la última respuesta completa y guarda sus bloques de código en

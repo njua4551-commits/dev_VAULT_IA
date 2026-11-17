@@ -17,7 +17,7 @@ import (
 // planTools son las únicas herramientas del modo Plan (agente de solo lectura).
 var planTools = map[string]bool{
 	"read_file": true, "list_dir": true, "grep": true, "web_fetch": true,
-	"view_image": true, "screenshot": true, "question": true, "bash": true, "todo": true,
+	"view_image": true, "screenshot": true, "skill": true, "repo_map": true, "task": true, "diagnostics": true, "lsp": true, "question": true, "bash": true, "todo": true,
 }
 
 func planToolAllowed(name string) bool { return planTools[name] }

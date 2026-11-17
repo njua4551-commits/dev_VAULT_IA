@@ -186,11 +186,11 @@ func TestAgentStepLabel(t *testing.T) {
 		t.Fatalf("sin agente = %q", label)
 	}
 	m.run.agent = &agentRun{steps: 5}
-	if label := m.agentStepLabel(); label != "paso 5/30" {
+	if label := m.agentStepLabel(); label != "paso 5/100" {
 		t.Fatalf("label = %q", label)
 	}
 	m.run.agent.paused = true
-	if label := m.agentStepLabel(); label != "pausado 5/30" {
+	if label := m.agentStepLabel(); label != "pausado 5/100" {
 		t.Fatalf("label pausado = %q", label)
 	}
 }

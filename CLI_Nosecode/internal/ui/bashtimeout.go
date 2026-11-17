@@ -19,8 +19,10 @@ const bashMaxWait = 600
 type bashWaitState struct {
 	call     api.ToolCall
 	proc     *tools.BashProcess
-	timeoutS int // intervalo pedido por el modelo
-	elapsed  int // segundos totales ya esperados
+	timeoutS int       // intervalo pedido por el modelo
+	elapsed  int       // segundos totales ya esperados
+	outLen   int       // tamaño de la salida en la última comprobación
+	idleFrom time.Time // desde cuándo no llega salida nueva
 }
 
 type bashWaitMsg struct {
@@ -80,7 +82,8 @@ func (m Model) beginBashWait(msg toolDoneMsg) (tea.Model, tea.Cmd) {
 	if timeoutS >= bashMaxWait {
 		return m.cancelBashWait(msg.call, msg.process, msg.result.Text, timeoutS, true)
 	}
-	m.bashWait = bashWaitState{call: msg.call, proc: msg.process, timeoutS: timeoutS, elapsed: timeoutS}
+	m.bashWait = bashWaitState{call: msg.call, proc: msg.process, timeoutS: timeoutS, elapsed: timeoutS,
+		outLen: len(msg.result.Text), idleFrom: time.Now()}
 	m.screen = screenBashWait
 	m.toast = fmt.Sprintf("⌛ %d s · el comando sigue vivo", timeoutS)
 	m.scroll = 0
@@ -92,6 +95,8 @@ func (m Model) bashWaitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "s", "enter", "y":
 		return m.continueBashWait()
+	case "b":
+		return m.backgroundBashWait()
 	case "c", "n", "esc":
 		w := m.bashWait
 		out := ""
@@ -101,6 +106,34 @@ func (m Model) bashWaitKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cancelBashWait(w.call, w.proc, out, w.elapsed, false)
 	}
 	return m, nil
+}
+
+// backgroundBashWait deja el proceso vivo como job y sigue con el agente.
+func (m Model) backgroundBashWait() (tea.Model, tea.Cmd) {
+	a := m.run.agent
+	w := m.bashWait
+	if a == nil || w.proc == nil {
+		m.screen = screenChat
+		return m, nil
+	}
+	cmd, _ := bashCommand(w.call)
+	id := tools.RegisterJob(cmd, w.proc)
+	text := strings.TrimRight(w.proc.Output(), "\n")
+	if text != "" {
+		text += "\n"
+	}
+	text += tools.JobNote(id)
+	m = m.setToolBlock(w.call.ID, func(b *session.ToolBlock) {
+		b.Status = toolOK
+		b.Output = text
+	})
+	m = m.appendToolResult(w.call, text, nil, false, 0, time.Since(w.proc.Started()))
+	m.bashWait = bashWaitState{}
+	m.screen = screenChat
+	m = m.stopActivity()
+	m.toast, m.toastErr = fmt.Sprintf("Comando en segundo plano (job %d)", id), false
+	a.pendingIdx++
+	return m.executeNextTool()
 }
 
 // continueBashWait espera otro intervalo sin reiniciar el proceso.
@@ -148,6 +181,10 @@ func (m Model) onBashWait(msg bashWaitMsg) (tea.Model, tea.Cmd) {
 			return m.cancelBashWait(msg.call, msg.proc, msg.output, elapsed, true)
 		}
 		m.bashWait.elapsed = elapsed
+		if len(msg.output) != m.bashWait.outLen {
+			m.bashWait.outLen = len(msg.output)
+			m.bashWait.idleFrom = time.Now()
+		}
 		m = m.setToolBlock(msg.call.ID, func(b *session.ToolBlock) {
 			b.Status = toolSoftTimeout
 			b.TimeoutS = elapsed
@@ -242,9 +279,18 @@ func (m Model) bashWaitScreen() []uiLine {
 	}}
 	body := []uiLine{
 		{text: textStyle.Render(fmt.Sprintf("Han pasado %d s de un máximo de %d s.", w.elapsed, bashMaxWait))},
-		{text: faintStyle.Render("La salida parcial ya está visible en el chat.")},
-		{},
 	}
+	if cmd, ok := bashCommand(w.call); ok && cmd != "" {
+		for _, ln := range wrapText("$ "+oneLine(cmd, 300), innerW) {
+			body = append(body, uiLine{text: faintStyle.Render(ln)})
+		}
+	}
+	if !w.idleFrom.IsZero() {
+		if idle := int(time.Since(w.idleFrom).Seconds()); idle >= 5 {
+			body = append(body, uiLine{text: dangerStyle.Render(fmt.Sprintf("Sin salida nueva desde hace %d s: puede ser un servidor o estar esperando entrada.", idle))})
+		}
+	}
+	body = append(body, uiLine{})
 	out := ""
 	if w.proc != nil {
 		out = strings.TrimRight(sanitizeText(w.proc.Output()), "\n")
@@ -264,12 +310,14 @@ func (m Model) bashWaitScreen() []uiLine {
 	}
 	body = append(body,
 		uiLine{text: primaryStyle.Render("[s] Seguir esperando " + fmt.Sprintf("%d s", minInt(w.timeoutS, bashMaxWait-w.elapsed)))},
+		uiLine{text: textStyle.Render("[b] Dejar en segundo plano y continuar")},
 		uiLine{text: dangerStyle.Render("[c] Cancelar y devolver la salida parcial")},
 	)
 	n := len(body)
-	body[n-2].hits = []relHit{{x: 0, w: innerW, action: "bashContinue"}}
+	body[n-3].hits = []relHit{{x: 0, w: innerW, action: "bashContinue"}}
+	body[n-2].hits = []relHit{{x: 0, w: innerW, action: "bashBackground"}}
 	body[n-1].hits = []relHit{{x: 0, w: innerW, action: "bashCancel"}}
-	footer := "s seguir · c cancelar · esc cancelar"
+	footer := "s seguir · b segundo plano · c cancelar · esc cancelar"
 	return m.centerModal(m.modalFrame(boxW, head, body, footer), boxW)
 }
 

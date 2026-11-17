@@ -34,7 +34,18 @@ Detalle histórico por versión: `CHECKPOINT.md`. Reglas del proyecto: `../AGENT
 | Timeout suave de bash | `ui/bashtimeout.go`, `tools/exec.go` |
 | Razonamiento (`/thinking`, ctrl+t) | `ui/thinking.go`, `api/chat.go` (`Chunk.Reasoning`) |
 | Contexto: aviso, `max_tokens`, `/compact` | `ui/model.go` (`warnContext`), `ui/instructions.go` (`maxOutputTokens`), `ui/compact.go` |
-| `/mcp add|remove|import` | `ui/mcpadd.go`, `ui/agent.go` (`mcpSlash`), `mcp/mcp.go` (no tocar) |
+| `/mcp` add/remove/test/doctor/list/enable/filter/perm/import | `ui/mcpadd.go` (parser con flags), `ui/mcpcmds.go` (tabla, test, filtros, import), `config/mcpimport.go` (JSONC + formatos Claude/Cursor/VS Code/OpenCode), `mcp/mcp.go` (`Probe`, stderr en errores) |
+| Bucle sin interfaz, `nosecode run`, subagente `task` | `agentloop/loop.go` (`Run`), `agentloop/policy.go` (`NewPolicy`), `agentloop/subagent.go`, `cmd/nosecode/run.go`, `tools/subagent.go` (`SubagentRunner`) |
+| `apply_patch` (diff unificado multiarchivo, todo o nada) / `repo_map` | `tools/patch.go`, `tools/repomap.go` |
+| Autocompactado dentro de una tarea | `ui/autocompact.go` (`shrinkMessages`, llamado en `beginAgent`) |
+| Terminal con PTY (`terminal`, `/terminal`) | `tools/terminal.go` (sesiones, teclas, `settle`), `tools/vt.go` (emulador), `tools/terminal_unix.go`/`_windows.go`, `ui/termview.go` (vista y teclas del usuario); permisos en `ui/toolblock.go` y `agentloop/policy.go` |
+| Shell persistente (`/shell`, config `tools.persistent_shell`) | `tools/pshell.go` (`persistentStart`, centinela, `ResetShell`, `ShellStatus`), `tools/exec.go` (`awaitBash`), `ui/sandbox.go` (`shellSlash`) |
+| Sandbox de bash (`/sandbox`, config `sandbox`, `run --sandbox`) | `tools/sandbox.go` (`sandboxWrap`, `bwrapArgs`, `seatbeltProfile`), `ui/sandbox.go`; se aplica en `tools/exec.go` antes de crear el `exec.Cmd` |
+| Limpieza de procesos | `tools/jobs.go` (`trackLive`, `KillJobs` = todo proceso vivo), señales SIGHUP/SIGTERM en `cmd/nosecode/main.go` |
+| LSP: diagnósticos tras editar, `diagnostics`, `lsp` (definition/references/hover) | `lsp/client.go` (protocolo), `lsp/manager.go` (servidores por extensión, raíz del proyecto), `tools/lsptools.go`; config `lsp.servers` / `lsp.disabled` |
+| MCP por SSE antiguo (con fallback desde HTTP) | `mcp/sse.go`, `config.MCPServer.Transport` |
+| Procesos en segundo plano (`bash background`, `jobs`, tecla `b` del aviso de espera) | `tools/jobs.go`, `ui/bashtimeout.go` |
+| `@archivo`, rutas arrastradas, `/check`, comandos propios, hooks, skills | `ui/extras.go`, `tools/skills.go`, `tools/hooks.go` (`hooks.after_edit` en config) |
 | Config y valores por defecto | `config/config.go` |
 | Vista y modales | `ui/view.go` |
 | Menú `/` y ayuda | `ui/slash.go`, `ui/model.go` (`helpLines`) |
@@ -50,6 +61,7 @@ Detalle histórico por versión: `CHECKPOINT.md`. Reglas del proyecto: `../AGENT
 - `Model` es un valor (Bubble Tea): cada función devuelve el `Model` modificado; **`m = m.closeMCP()`**, no `m.closeMCP()`.
 - Nada de lo que venga del modelo se ejecuta sin pasar por `bashDecision`/permisos; `allow` solo para la lista cerrada.
 - El razonamiento (`Message.Think`) y los bloques `Message.Tool` nunca se reenvían al modelo.
+- Los procesos de `bash` NO usan el contexto de la herramienta para morir (`WithoutCancel`): la cancelación se hace explícita en `runBashInner`, porque pueden pasar a job.
 - Para APIs en la nube no añadir parámetros propios de llama.cpp: usar `localMaxTokens()`/`localThinking()`.
 - La contraseña de sudo solo existe en `Model.sudoPW` y en el `context` de una ejecución; nunca en mensajes, sesiones ni logs.
 - No guardar claves en debug.log; `NOSECODE_HOME` y debug.log son rutas sensibles.

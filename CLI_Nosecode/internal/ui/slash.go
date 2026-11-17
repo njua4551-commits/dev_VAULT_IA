@@ -31,6 +31,15 @@ var slashEntries = []slashEntry{
 	{"/img", "adjuntar una imagen (ruta o portapapeles); ctrl+v pega", true},
 	{"/export", "guardar la conversación en Markdown", true},
 	{"/undo", "deshacer el último cambio de archivo del agente", true},
+	{"/check", "verificar el proyecto y corregir hasta que pase", true},
+	{"/terminal", "terminales interactivas (PTY): ver/escribir en las del agente (new|close)", true},
+	{"/shell", "shell persistente de bash: cd y variables se mantienen (on|off|reset)", true},
+	{"/sandbox", "aislar bash: solo escribe en el proyecto (off|auto|on)", true},
+	{"/pr", "preparar rama, commit y pull request (gh)", false},
+	{"/worktree", "crear un git worktree aislado para una tarea", true},
+	{"/commit", "commit de git con mensaje generado por el agente", true},
+	{"/map", "mapa del proyecto (archivos y símbolos)", false},
+	{"/commands", "ver tus comandos propios (.nosecode/commands)", false},
 	{"/init", "crear AGENTS.md del proyecto con el agente", false},
 	{"/tools", "herramientas activas; browser/mcp on|off", true},
 	{"/compact", "resumir la conversación y ahorrar contexto", false},
@@ -79,6 +88,11 @@ func (m Model) slashMatches() []slashEntry {
 	for _, e := range slashEntries {
 		if q == "/" || strings.HasPrefix(e.name, q) {
 			out = append(out, e)
+		}
+	}
+	for _, c := range m.customCommands() {
+		if name := "/" + c.name; q == "/" || strings.HasPrefix(name, q) {
+			out = append(out, slashEntry{name, c.desc, true})
 		}
 	}
 	return out

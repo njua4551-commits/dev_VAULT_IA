@@ -55,6 +55,8 @@ func (m Model) View() string {
 			lines = m.imageScreen()
 		case screenCatalog:
 			lines = m.catalogScreen()
+		case screenTerminal:
+			lines = m.termScreen()
 		default:
 			lines = m.mainScreen()
 		}

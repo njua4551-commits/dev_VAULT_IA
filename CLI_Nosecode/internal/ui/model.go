@@ -3,15 +3,20 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"nosecode/internal/agentloop"
 	"nosecode/internal/api"
 	"nosecode/internal/config"
 	"nosecode/internal/debuglog"
+	"nosecode/internal/lsp"
 	"nosecode/internal/mcp"
 	"nosecode/internal/session"
+	"nosecode/internal/tools"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -32,6 +37,7 @@ const (
 	screenSudo
 	screenImage
 	screenCatalog
+	screenTerminal
 )
 
 // toolConfirmState pide permiso antes de ejecutar una herramienta MCP.
@@ -179,6 +185,7 @@ type Model struct {
 	plan             string
 	question         questionState
 	mcpPending       *mcpPendingAdd
+	mcpTestName      string // servidores (separados por espacio) a probar tras el comando
 	showThink        bool
 	sudo             sudoState
 	attachments      []string
@@ -190,6 +197,7 @@ type Model struct {
 	vaultNoticeErr   bool
 	vaultNoticeUntil time.Time
 	imgView          imgViewState
+	termView         termViewState
 	sudoPW           string // solo memoria; nunca se guarda ni se envía
 	sudoUntil        time.Time
 	hoverBox         hitBox
@@ -237,6 +245,11 @@ type Model struct {
 
 // New construye la aplicacion con la configuracion ya cargada.
 func New(cfg *config.Config) Model {
+	cwd, _ := os.Getwd()
+	tools.SkillDirs = []string{filepath.Join(cwd, ".nosecode", "skills"), filepath.Join(cwd, "skills"), filepath.Join(config.Home(), "skills")}
+	tools.SubagentRunner = agentloop.Subagent(cfg)
+	lsp.Default.Enabled, lsp.Default.Servers = !cfg.LSP.Disabled, cfg.LSP.Servers
+	applySandbox(cfg)
 	m := newModel(cfg, true)
 	if changed, url := cfg.SyncVault(); changed {
 		_ = cfg.Save()
@@ -341,8 +354,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case mcpReadyMsg:
 		return m.onMCPReady(msg)
+	case mcpTestMsg:
+		return m.onMCPTest(msg)
 	case toolDoneMsg:
 		return m.onToolDone(msg)
+	case termTickMsg:
+		if m.screen == screenTerminal {
+			return m, termTick()
+		}
+		return m, nil
 	case bashWaitMsg:
 		return m.onBashWait(msg)
 	case activityMsg:
@@ -412,6 +432,9 @@ func (m Model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == "ctrl+q" {
 		m.cancelAll()
 		return m, tea.Quit
+	}
+	if m.screen == screenTerminal {
+		return m.termKey(k) // ctrl+c y demás teclas van al programa
 	}
 	if key == "ctrl+v" && m.screen == screenChat {
 		if nm, ok := m.pasteImageKey(); ok {
@@ -713,6 +736,8 @@ func (m Model) activate(action, arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "bashContinue":
 		return m.continueBashWait()
+	case "bashBackground":
+		return m.backgroundBashWait()
 	case "bashCancel":
 		w := m.bashWait
 		return m.cancelBashWait(w.call, w.proc, w.proc.Output(), w.elapsed, false)
@@ -829,21 +854,56 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	if strings.HasPrefix(text, "/") {
+		if exp, ok := m.expandCustom(text); ok {
+			text = exp
+		}
+	} else if cwd, err := os.Getwd(); err == nil {
+		text = mentionizePaths(text, cwd)
+	}
+
+	if strings.HasPrefix(text, "/") {
 		if cmd, ok := vaultCommand(text); ok {
 			return m.startVault(cmd)
 		}
 		if strings.EqualFold(strings.Fields(text)[0], "/init") {
 			return m.initStart()
 		}
+		if strings.EqualFold(strings.Fields(text)[0], "/pr") {
+			return m.promptStart(prPrompt, "/pr")
+		}
+		if strings.EqualFold(strings.Fields(text)[0], "/worktree") {
+			f := strings.Fields(text)
+			if len(f) < 2 || !mcpNameRe.MatchString(strings.ToLower(f[1])) {
+				m.toast, m.toastErr = "Uso: /worktree <nombre> (a-z, 0-9, - y _)", true
+				return m, nil
+			}
+			return m.promptStart(worktreePrompt(strings.ToLower(f[1])), "/worktree")
+		}
+		if strings.EqualFold(strings.Fields(text)[0], "/commit") {
+			extra := strings.TrimSpace(text[len("/commit"):])
+			p := commitPrompt
+			if extra != "" {
+				p += " Indicación del usuario: " + extra
+			}
+			return m.promptStart(p, "/commit")
+		}
+		if strings.EqualFold(strings.Fields(text)[0], "/check") {
+			return m.checkStart(strings.TrimSpace(text[len("/check"):]))
+		}
 		if strings.EqualFold(strings.Fields(text)[0], "/compact") {
 			return m.compactStart()
 		}
 		m = m.slash(text)
+		if m.screen == screenTerminal {
+			return m, termTick()
+		}
+		var testCmd tea.Cmd
+		m, testCmd = m.takeMCPTests()
 		if m.mcpLoading && m.mcp == nil && !m.mcpInFlight && len(m.cfg.MCP.Servers) > 0 {
 			m.mcpInFlight = true
-			return m, connectMCPCmd(m.cfg.MCP.Servers)
+			return m, tea.Batch(connectMCPCmd(m.cfg.MCP.Servers), testCmd)
 		}
-		return m, nil
+		return m, testCmd
 	}
 
 	m.msgs = append(m.msgs, Message{Role: "user", Text: text, Images: m.attachments})
@@ -981,6 +1041,16 @@ func (m Model) slash(text string) Model {
 		return m.imgSlash(rest)
 	case "/export":
 		return m.exportSlash()
+	case "/terminal", "/term":
+		return m.termSlash(strings.Fields(rest))
+	case "/shell":
+		return m.shellSlash(strings.Fields(rest))
+	case "/sandbox":
+		return m.sandboxSlash(strings.Fields(rest))
+	case "/map":
+		return m.mapSlash()
+	case "/commands", "/comandos":
+		return m.commandsSlash()
 	case "/undo", "/redo":
 		return m.undoSlash(cmd, rest)
 	case "/thinking", "/pensar":
@@ -1242,7 +1312,8 @@ func (m Model) openConfirmDown() Model {
 
 func (m Model) confirmConfirmed() (tea.Model, tea.Cmd) {
 	if m.confirm.action == "mcpAdd" {
-		return m.mcpAddConfirmed(), nil
+		nm := m.mcpAddConfirmed()
+		return nm.takeMCPTests()
 	}
 	if m.confirm.action == "vaultDown" {
 		m.screen = screenChat
@@ -1593,6 +1664,13 @@ var helpText = strings.Join([]string{
 	"  /delete     eliminar sesión",
 	"  /tools      herramientas activas y tokens; browser/mcp on|off",
 	"  /compact    resumir la conversación para ahorrar contexto",
+	"  /check      verificar el proyecto y corregir hasta que pase",
+	"  /commit     commit de git con mensaje generado",
+	"  /map        mapa del proyecto (archivos y símbolos)",
+	"  /sandbox    aislar bash (bubblewrap / sandbox-exec)",
+	"  /pr         rama + commit + pull request con gh",
+	"  /worktree   crear un git worktree aislado",
+	"  /commands   comandos propios (.nosecode/commands)",
 	"  /vault      importar endpoint del Vault",
 	"  /up         encender la IA en Kaggle (vault.py up)",
 	"  /down       apagar la IA y dejar de gastar GPU (F8)",

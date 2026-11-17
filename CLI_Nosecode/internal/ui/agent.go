@@ -17,6 +17,7 @@ import (
 	"nosecode/internal/config"
 	"nosecode/internal/debuglog"
 	"nosecode/internal/images"
+	"nosecode/internal/lsp"
 	"nosecode/internal/mcp"
 	"nosecode/internal/session"
 	"nosecode/internal/tools"
@@ -120,13 +121,21 @@ const agentSystem = "Eres Nosecode, un agente de terminal con herramientas nativ
 	"para trabajos largos pide un timeout_s mayor.\n" +
 	"11. Usa question cuando necesites una decisión del usuario: 2 a 4 opciones claras; " +
 	"no lo uses para pedir permiso de herramientas.\n" +
-	"12. No existen subagentes: haz tú el trabajo con las herramientas listadas; si pides una " +
+	"12. task lanza un subagente explorador de SOLO LECTURA con contexto propio (úsalo para investigar " +
+	"código grande sin llenar tu contexto); no puede editar. repo_map te orienta en el proyecto " +
+	"y apply_patch cambia varios archivos a la vez con un diff unificado. diagnostics y lsp " +
+	"(definition, references, hover) dan errores de tipos y navegación semántica; tras editar " +
+	"recibirás solos los errores LSP: corrígelos antes de seguir. Si pides una " +
 	"herramienta que no existe recibirás la lista de las disponibles.\n" +
 	"13. Tareas grandes: primero un plan de 3 a 5 pasos y confírmalo con question; después " +
 	"ejecútalo por partes y resume cada unos 8 pasos. No intentes todo de una vez.\n" +
 	"14. En tareas de 3 o más pasos usa todo: escribe la lista, mantén una sola en in_progress y marca " +
 	"completed al terminar cada una. Actualízala antes de seguir con la siguiente.\n" +
-	"15. Responde en español, breve y claro. No inventes resultados."
+	"15. Procesos que no terminan solos (servidores, watch, un servidor MCP stdio que espera entrada): " +
+	"lánzalos con bash background:true y gestiónalos con jobs (list, output, kill); nunca los dejes en " +
+	"primer plano. Los comandos normales terminan solos y no tienen teclado.\n" +
+	"15b. Programas interactivos (python/node/psql, instaladores que preguntan, editores): usa la herramienta terminal (open, send con text/keys, read) en lugar de bash; lee la pantalla tras cada envío. Las contraseñas las escribe el usuario con /terminal, nunca tú. Cierra la terminal (close) al terminar.\n" +
+	"16. Responde en español, breve y claro. No inventes resultados."
 
 type mcpReadyMsg struct {
 	manager *mcp.Manager
@@ -184,7 +193,7 @@ func (m Model) resumeAgent() (Model, tea.Cmd) {
 		a.ctx, a.cancel = context.WithCancel(context.Background())
 	}
 	if text := lastUserText(m.msgs); text != "" {
-		a.msgs = append(a.msgs, api.ChatMessage{Role: "user", Content: userContent(text, lastUserImages(m.msgs), true)})
+		a.msgs = append(a.msgs, api.ChatMessage{Role: "user", Content: userContent(userTextForModel(text), lastUserImages(m.msgs), true)})
 	}
 	debuglog.Logf("agent resume steps=0 msgs=%d", len(a.msgs))
 	return m.beginAgent()
@@ -281,13 +290,21 @@ func (m Model) beginAgent() (Model, tea.Cmd) {
 		a.msgs = append([]api.ChatMessage{{Role: "system", Content: m.systemPrompt()}}, history...)
 	}
 	microcompact(a.msgs, m.cfg.Tools.CompactKeep)
+	defs := m.apiTools()
+	if win := m.effectiveContextWindow(); win > 0 {
+		budget := win - m.cfg.Tools.CompactReserved - toolDefsTokens(defs)
+		if shrunk, changed := shrinkMessages(a.msgs, budget); changed {
+			a.msgs = shrunk
+			m.toast, m.toastErr = "Contexto compactado automáticamente para seguir", false
+			debuglog.Logf("autocompact msgs=%d budget=%d", len(a.msgs), budget)
+		}
+	}
 	m = m.warnContext()
 	_, p := m.cfg.Active()
 	model := strings.TrimSpace(p.Model)
 	if model == "" {
 		model = "default"
 	}
-	defs := m.apiTools()
 	s := api.Stream(a.ctx, api.Request{
 		Bases:       api.Bases(p.BaseURL, config.VaultHome()),
 		APIKey:      p.APIKey,
@@ -332,12 +349,16 @@ func isBrowserShort(name string) bool {
 
 func (m Model) nativeToolAllowed(name string) bool {
 	switch name {
-	case "bash":
+	case "bash", "terminal":
 		return m.cfg.Permissions.Bash != "deny"
-	case "write_file", "edit_file":
+	case "write_file", "edit_file", "apply_patch":
 		return m.cfg.Permissions.Edit != "deny"
 	case "web_fetch":
 		return m.cfg.Permissions.Webfetch != "deny"
+	case "skill":
+		return len(tools.ListSkills()) > 0
+	case "diagnostics", "lsp":
+		return lsp.Default.Enabled
 	default:
 		return true
 	}
@@ -498,7 +519,7 @@ func (m Model) apiTools() []api.ToolDef {
 	}
 	if !plan && m.cfg.Tools.MCP && m.cfg.Permissions.MCP != "deny" {
 		for _, t := range m.mcpTools {
-			if isBrowserShort(shortTool(t.Wire)) {
+			if isBrowserShort(shortTool(t.Wire)) || !m.mcpToolVisible(t) {
 				continue
 			}
 			appendDef(t.Wire, t.Server+": "+t.Description, t.Schema)
@@ -533,7 +554,7 @@ func (m Model) systemPrompt() string {
 		prompt += planAgentSystem
 	}
 	cwd, _ := os.Getwd()
-	return prompt + loadInstructions(cwd, config.Home(), tools.MemoryPath())
+	return prompt + loadInstructions(cwd, config.Home(), tools.MemoryPath()) + projectPrompt(cwd) + sandboxPrompt()
 }
 
 func microcompact(msgs []api.ChatMessage, keep int) {
@@ -693,9 +714,9 @@ func (m Model) onAgentChunk(msg chunkMsg) (tea.Model, tea.Cmd) {
 
 func approvalCategory(name string) (string, bool) {
 	switch name {
-	case "bash":
+	case "bash", "terminal":
 		return "bash", true
-	case "write_file", "edit_file":
+	case "write_file", "edit_file", "apply_patch":
 		return "edit", true
 	}
 	if isBrowserShort(name) {
@@ -909,12 +930,25 @@ func (m Model) executeNextTool() (Model, tea.Cmd) {
 	}
 	mgr := m.mcp
 	servers := m.cfg.MCP.Servers
+	hooks := append([]string(nil), m.cfg.Hooks.AfterEdit...)
 	browserTool := isBrowserShort(call.Function.Name)
 	debuglog.Logf("tool start name=%s native=%v browser=%v", call.Function.Name, isNative, browserTool)
 	cmd := func() tea.Msg {
 		start := time.Now()
 		if isNative {
 			res := native.Run(ctx, json.RawMessage(call.Function.Arguments))
+			if len(hooks) > 0 && !res.Error {
+				files := res.Edited
+				if call.Function.Name == "write_file" || call.Function.Name == "edit_file" {
+					if f := editedPath(call); f != "" {
+						files = []string{f}
+					}
+				}
+				for _, f := range files {
+					res.Text += tools.RunHooks(hooks, f)
+				}
+				res.Text += lsp.Default.PostEditNotes(files)
+			}
 			return toolDoneMsg{call: call, result: nativeResult(res), duration: time.Since(start),
 				exitCode: res.ExitCode, bytes: res.Bytes, timeoutS: res.TimeoutS,
 				soft: res.Soft, process: res.Process, sudoBad: res.SudoBad, diff: res.Diff}
@@ -1621,6 +1655,9 @@ func oneLine(s string, max int) string {
 func (m Model) mcpSlash(rest string) Model {
 	arg := strings.ToLower(strings.TrimSpace(rest))
 	if f := strings.Fields(rest); len(f) > 0 {
+		if nm, ok := m.mcpSubcommand(f); ok {
+			return nm
+		}
 		switch strings.ToLower(f[0]) {
 		case "add", "añadir", "instalar":
 			return m.mcpAdd(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rest), f[0])))
@@ -1633,20 +1670,6 @@ func (m Model) mcpSlash(rest string) Model {
 		}
 	}
 	switch arg {
-	case "import", "importar":
-		n, path, err := m.cfg.ImportMCP()
-		if err != nil {
-			m.toast, m.toastErr = err.Error(), true
-			m.msgs = append(m.msgs, Message{Role: "assistant", Text: "MCP: " + err.Error()})
-			break
-		}
-		m = m.closeMCP()
-		if len(m.cfg.MCP.Servers) > 0 {
-			m.mcpLoading = true
-		}
-		m.toast, m.toastErr = fmt.Sprintf("%d servidores MCP importados", n), false
-		m.msgs = append(m.msgs, Message{Role: "assistant",
-			Text: fmt.Sprintf("Importados %d servidores MCP desde %s.\nSe conectarán en segundo plano; sus herramientas se envían con /tools mcp on.", n, path)})
 	case "on", "off":
 		m.cfg.MCP.Enabled = arg == "on"
 		m.saveCfg()
@@ -1678,25 +1701,9 @@ func (m Model) mcpSlash(rest string) Model {
 		m.saveCfg()
 		m.toast = "Permiso MCP: " + arg
 	case "":
-		var b strings.Builder
-		b.WriteString("MCP · agente " + onOff(m.cfg.MCP.Enabled) + "\n")
-		if m.mcp != nil {
-			b.WriteString("Conectados: " + strings.Join(m.mcp.Servers(), ", ") + "\n")
-			b.WriteString(fmt.Sprintf("Herramientas: %d\n", len(m.mcpTools)))
-		} else {
-			b.WriteString("Conectados: (ninguno todavía)\n")
-		}
-		b.WriteString(fmt.Sprintf("Configurados: %d · permiso: %s\n", len(m.cfg.MCP.Servers), m.cfg.Permissions.MCP))
-		if len(m.mcpErrs) > 0 {
-			b.WriteString("\nErrores:\n")
-			for _, e := range m.mcpErrs {
-				b.WriteString("• " + oneLine(e, 180) + "\n")
-			}
-		}
-		b.WriteString("\n/mcp add <nombre> <comando> · /mcp remove <nombre> · /mcp import · /mcp tools · /mcp on|off · /mcp ask|allow|deny")
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: b.String()})
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: m.mcpStatusText()})
 	default:
-		m.msgs = append(m.msgs, Message{Role: "assistant", Text: "Uso: /mcp [add|remove|import|tools|on|off|reload|ask|allow|deny]"})
+		m.msgs = append(m.msgs, Message{Role: "assistant", Text: "Uso: /mcp [list|add|remove|test|doctor|enable|disable|import|filter|perm|tools|on|off|reload|ask|allow|deny]"})
 	}
 	m = m.saveActive()
 	m.layout()
@@ -1810,4 +1817,15 @@ func (m Model) mcpStatus() string {
 		return fmt.Sprintf("MCP %d tools", len(m.mcpTools))
 	}
 	return ""
+}
+
+// editedPath devuelve la ruta que escribió write_file o edit_file.
+func editedPath(call api.ToolCall) string {
+	var a struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal([]byte(call.Function.Arguments), &a) != nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Path)
 }

@@ -126,10 +126,21 @@ func (m Model) callNeedsApproval(call api.ToolCall) bool {
 	if shortTool(call.Function.Name) == "question" {
 		return false
 	}
+	if call.Function.Name == "terminal" && terminalAction(call) != "open" {
+		return false // la sesión ya se aprobó al abrirla
+	}
 	if _, isBash := bashCommand(call); isBash {
 		switch d, _ := m.bashDecision(call); d {
 		case "allow", "deny":
 			return false
+		}
+	}
+	if cat, ok := approvalCategory(call.Function.Name); ok && cat == "mcp" {
+		switch m.mcpServerPerm(call.Function.Name) {
+		case "allow":
+			return false
+		case "ask":
+			return true
 		}
 	}
 	if cat, ok := approvalCategory(call.Function.Name); ok && !m.approvalAllowed(cat) {
@@ -151,6 +162,21 @@ func toolArgsDisplay(call api.ToolCall) string {
 		if cmd := str("command"); cmd != "" {
 			return "$ " + cmd
 		}
+	case "terminal":
+		act := str("action")
+		if act == "" {
+			act = "open"
+		}
+		switch act {
+		case "open":
+			if c := str("command"); c != "" {
+				return "terminal ▸ " + c
+			}
+			return "terminal ▸ shell"
+		case "send":
+			return fmt.Sprintf("terminal %v ◂ %s %s", a["id"], strings.TrimSpace(str("text")), strings.Join(anyStrings(a["keys"]), " "))
+		}
+		return fmt.Sprintf("terminal %s %v", act, a["id"])
 	case "read_file", "write_file", "edit_file", "list_dir", "view_image":
 		if path := str("path"); path != "" {
 			return path
@@ -467,4 +493,28 @@ func (m Model) questionBlockLines(b *session.ToolBlock, avail int, blank uiLine,
 		lines = append(lines, rowS("  sin respuesta", faintStyle))
 	}
 	return append(lines, blank)
+}
+
+func terminalAction(call api.ToolCall) string {
+	var a struct {
+		Action  string `json:"action"`
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal([]byte(call.Function.Arguments), &a)
+	if a.Action == "" && a.Command != "" {
+		return "open"
+	}
+	return strings.ToLower(a.Action)
+}
+
+func anyStrings(v any) []string {
+	var out []string
+	if l, ok := v.([]any); ok {
+		for _, x := range l {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }

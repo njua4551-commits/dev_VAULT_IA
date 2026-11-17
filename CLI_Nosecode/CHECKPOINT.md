@@ -3,6 +3,55 @@
 Estado guardado en disco. El código compila, pasa `go vet` y `go test ./...`.
 Binario instalado en `C:\Users\Enoc\AppData\Local\Nosecode\bin\nosecode.exe`.
 
+## 0.15.0 — 2026-11-16 (terminal con PTY real)
+
+- **Herramienta `terminal`** (Linux/macOS; no se ofrece en Windows): sesiones con PTY real para programas interactivos (python/node/psql, instaladores que preguntan, editores). Acciones: `open` (command, cwd, cols, rows), `send` (text y/o keys: Enter, Tab, Esc, flechas, Ctrl-C, Alt-x, F1…), `read` (until, history), `resize`, `close`, `list`. Devuelve la pantalla ya renderizada como texto + posición del cursor.
+- **Emulador de pantalla propio** (`tools/vt.go`): cursor, scroll y región de scroll, pantalla alterna (1049), borrado, insertar/borrar líneas/caracteres, UTF-8 y caracteres anchos, historial de 1000 líneas; responde a DSR/DA (posición del cursor) para que readline/prompt_toolkit funcionen. No guarda colores.
+- **Seguridad**: abrir una terminal pide aprobación como bash (permissions.bash, bash_rules, `--yes` en `run`); las sesiones aprobadas aceptan send/read sin volver a preguntar. Va dentro del sandbox si está activo. Si el cursor está tras un aviso de contraseña (`password:`, `[sudo]`, passphrase…) la herramienta se niega a escribir: la contraseña la teclea el usuario.
+- **`/terminal`** (alias `/term`): lista; `/terminal <id>` entra a la sesión para mirar y teclear (salir con ctrl+]); `/terminal new [cmd]`; `/terminal close <id>`. Máx. 4 sesiones; `KillJobs` las mata al salir.
+- Dependencias nuevas: `github.com/creack/pty v1.1.24` (go.mod/go.sum actualizados; `go-runewidth` pasa a directa).
+- Tests: `tools/terminal_test.go` (emulador, python interactivo, `read -p`, shell, contraseñas, teclas, historial/resize, sandbox con bwrap, con -race), `ui/termview_test.go`.
+- Límites: sin ConPTY (Windows); sin colores; programas de pantalla completa (vim/htop) se ven pero un modelo débil los maneja mal; los hijos que se desvinculan del grupo (setsid) pueden sobrevivir.
+
+## 0.14.0 — 2026-11-16 (shell persistente)
+
+- **Shell persistente** (`/shell on|off|reset|status`, config `tools.persistent_shell`, por defecto activado; no en Windows): un único bash vivo entre comandos, así `cd`, `export`, `source .venv/bin/activate`, funciones y alias persisten. Cada comando viaja en base64 y se evalúa (`eval`) con stdin en /dev/null; una línea centinela devuelve código de salida y `$PWD`. Si el directorio cambia, la salida lo indica.
+- `exit` o la muerte del shell: se reinicia en el siguiente comando conservando el directorio (no las variables) y lo avisa. Cancelar o «cancelar» en el modal del timeout mata el shell. Un comando pasado a segundo plano desde el modal deja ese shell para él y el siguiente comando abre otro.
+- Se usa el sandbox (el shell nace dentro de bubblewrap/seatbelt; si cambia la configuración se reinicia). `sudo` y `background:true` usan el modo de siempre (proceso independiente). `KillJobs` mata también el shell.
+- Límites: sin PTY (nada interactivo), un solo shell compartido con los subagentes.
+- Tests: `tools/pshell_test.go` (cd/variables, código de salida, exit, cancelar, segundo plano, KillJobs); `awaitBash` refactorizado en `tools/exec.go`.
+
+## 0.13.0 — 2026-11-16 (sandbox, limpieza de procesos)
+
+- **Sandbox de bash** (`/sandbox off|auto|on`, `/sandbox net off`; config `sandbox.mode|no_network|writable`; `nosecode run --sandbox`): en Linux usa **bubblewrap** (disco en solo lectura salvo el proyecto, /tmp, cachés `~/.cache ~/go ~/.npm ~/.cargo` y `writable`; secretos de `sensitiveEntries` ocultos con tmpfs o /dev/null; PID aislado; `--die-with-parent`; red opcional). macOS: perfil `sandbox-exec` (generado y testeado como texto, **no ejecutado**). Windows: no disponible. `off` por defecto; `auto` aísla si hay herramienta; `on` obliga (sin herramienta bash se niega). sudo no funciona dentro. El prompt del sistema avisa al modelo cuando está activo. No cubre `write_file/edit_file`, MCP ni hooks. Test real con bwrap (escribe dentro sí, fuera no, secretos ocultos, sin red).
+- **Procesos residuales**: `KillJobs` mata todo proceso de bash vivo (también los de primer plano y los del aviso de timeout) al salir y al recibir SIGHUP/SIGTERM. No cubre `nohup/setsid` deliberados ni `kill -9` a Nosecode.
+- Arreglado un test SSE inestable (canal por sesión en el servidor falso).
+
+## 0.12.0 — 2026-11-16 (LSP, /pr, /worktree)
+
+- **LSP** (`internal/lsp`): cliente propio (stdio, Content-Length) con gestor por extensión: `gopls`, `pyright-langserver --stdio`, `typescript-language-server --stdio`, `rust-analyzer` (si están en el PATH; sobrescribe con `lsp.servers` en config, apaga con `lsp.disabled`). Herramientas `diagnostics` y `lsp` (definition/references/hover); **tras write_file/edit_file/apply_patch el resultado incluye los errores LSP** del archivo (TUI y `nosecode run`). Un servidor que no arranca se marca como fallido y no se reintenta en la sesión. Tests: servidor falso en Python + pyright real (se omite si no está instalado).
+- **`/pr`** (rama, commit, push, `gh pr create`) y **`/worktree <nombre>`** como comandos de prompt para el agente (pasan por los permisos normales de bash).
+- **Sigue sin hacerse**: OAuth de MCP, shell/PTY persistente, sandbox (bwrap/Landlock), API de GitHub propia (se usa `gh`), paleta difusa, embeddings.
+
+## 0.11.0 — 2026-11-16 (headless, subagentes, apply_patch, repo_map, autocompactado, MCP SSE)
+
+- **`nosecode run "tarea"`** (`--yes`, `--read-only`, `--json`, `--max-steps`, `--model`, `--cwd`; stdin si no hay tarea): bucle sin TUI en `internal/agentloop`. Sin `--yes`, lo que pediría permiso se deniega; respeta `bash_rules`, `permissions.*=deny` y bloquea sudo. Códigos de salida 0/1/2/3. Tests con modelo falso en `cmd/nosecode/run_test.go`.
+- **Subagente `task`**: explorador de solo lectura con contexto propio (12 pasos, sin edición ni `task`); el padre solo recibe el resumen. Disponible en la TUI, en Plan y en `run`.
+- **`apply_patch`**: diff unificado multiarchivo, todo o nada, localiza por contenido (tolera números de línea desplazados), crea archivos con `--- /dev/null`, entra en `/undo`; no borra archivos. Pasa por los mismos permisos de edición y hooks.
+- **`repo_map` y `/map`**: árbol compacto con símbolos (Go, Python, JS/TS, Rust, Java), ≤6 KB, ignora node_modules/.git/etc.
+- **Autocompactado**: antes de cada petición del agente, si no cabe en `ventana − compact_reserved − herramientas`, recorta salidas largas → borra salidas antiguas → omite grupos viejos (nunca separa llamada y resultado). Aviso «Contexto compactado automáticamente».
+- **`/commit`** (el agente revisa status/diff y hace el commit, sin push), ayuda ampliada.
+- **MCP SSE antiguo**: `transport:"sse"` / `--transport sse`; con servidores remotos que dan 404/405/400 se prueba SSE solo.
+- **Sigue sin hacerse**: LSP, OAuth de MCP, shell/PTY persistente, sandbox, worktrees, GitHub API, paleta difusa, embeddings.
+
+## 0.10.0 — 2026-11-15 (MCP completo, segundo plano, pasos sin pausas, verificación)
+
+- **Comando colgado (captura del usuario)**: el aviso «Comando aún en ejecución» ahora muestra el comando, avisa «Sin salida nueva desde hace N s» y ofrece `[b] segundo plano`. `bash` acepta `background:true`; herramienta `jobs` (list/output/kill) en `tools/jobs.go`. Los procesos ya no mueren con el contexto (`WithoutCancel`). Regla 15 del sistema: servidores/watch → background. Al salir se hace `tools.KillJobs()`.
+- **Pasos**: `max_steps` por defecto 100 (límite 300); un config antiguo con 30 se migra a 100. Solo pausa/resume al llegar al tope.
+- **MCP** (según el análisis del asistente): `/mcp` imprime tabla por servidor; `/mcp test [n]` (versión, nº de herramientas, latencia, stderr del servidor), también automático tras `add`; `/mcp doctor`; `enable|disable`; flags en `add` (`--env --header --cwd --timeout --type --include --exclude --`) y JSON pegado; valores de env/headers ocultos (`••••`) en el modal; `include/exclude` (glob) y `permission` por servidor; import de OpenCode/Claude/Cursor/VS Code/ruta con JSONC y sin pisar duplicados; error claro si el comando no está en el PATH.
+- **Agente**: `@archivo`/`@carpeta` en el prompt (se expande solo en el último mensaje de usuario); rutas pegadas/arrastradas → `@ruta`; `/check` (detecta Go/Node/Rust/Python/Make y pide verificar→corregir→repetir) y el prompt del sistema incluye cómo verificar el proyecto; comandos propios `.nosecode/commands/*.md` (`$ARGUMENTS`, `$1`) + `/commands`; hooks `hooks.after_edit` (`{file}`, 30 s, solo añade salida si falla); skills (`.nosecode/skills`, `skills/`, `~/.nosecode/skills`) con herramienta `skill` y índice en el prompt.
+- **No hecho**: modo headless `nosecode run`, LSP, apply_patch multiarchivo, subagentes, OAuth/SSE de MCP, autocompactado automático.
+
 ## 0.9.1 — contador estable, imágenes nítidas, question en prosa
 
 - **Contador de contexto**: llama.cpp reporta `timings.prompt_n` solo con los tokens nuevos (el resto sale de `cache_n`), por eso el número saltaba. Ahora `api/chat.go` suma `prompt_n + cache_n`, pide `stream_options.include_usage` y `contextEstimate` cuenta ≈1000 tokens por imagen (`imageTokens`). Test: `TestUsageConCacheNoSalta`.

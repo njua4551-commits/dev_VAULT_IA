@@ -13,8 +13,8 @@ import (
 var toolAliases = map[string]string{
 	"read": "read_file", "cat": "read_file", "open": "read_file", "readfile": "read_file", "file_read": "read_file",
 	"write": "write_file", "create_file": "write_file", "writefile": "write_file", "file_write": "write_file", "save_file": "write_file",
-	"edit": "edit_file", "replace": "edit_file", "editfile": "edit_file", "str_replace": "edit_file", "patch": "edit_file",
-	"run": "bash", "shell": "bash", "sh": "bash", "exec": "bash", "terminal": "bash", "cmd": "bash", "execute": "bash", "run_command": "bash", "command": "bash",
+	"edit": "edit_file", "replace": "edit_file", "editfile": "edit_file", "str_replace": "edit_file", "patch": "apply_patch", "applypatch": "apply_patch", "apply_diff": "apply_patch",
+	"run": "bash", "shell": "bash", "sh": "bash", "exec": "bash", "cmd": "bash", "execute": "bash", "run_command": "bash", "command": "bash",
 	"ls": "list_dir", "list": "list_dir", "dir": "list_dir", "listdir": "list_dir", "list_files": "list_dir", "list_directory": "list_dir",
 	"search": "grep", "find": "grep", "rg": "grep", "search_files": "grep",
 	"fetch": "web_fetch", "web": "web_fetch", "browse": "web_fetch", "http_get": "web_fetch", "fetch_url": "web_fetch", "webfetch": "web_fetch",

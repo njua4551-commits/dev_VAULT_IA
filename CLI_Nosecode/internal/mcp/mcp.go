@@ -61,6 +61,7 @@ type conn struct {
 	cfg  config.MCPServer
 	tr   transport
 	byID map[string]string // nombre original -> wire
+	info string            // «nombre versión» que informa el servidor
 }
 
 type transport interface {
@@ -137,7 +138,13 @@ func connectOne(ctx context.Context, name string, cfg config.MCPServer) (*conn, 
 		if strings.TrimSpace(cfg.URL) == "" {
 			return nil, nil, errors.New("falta url")
 		}
-		tr = newHTTPTransport(cfg)
+		if strings.EqualFold(cfg.Transport, "sse") {
+			tr, err = newSSETransport(ctx, cfg)
+		} else {
+			tr = newHTTPTransport(cfg)
+		}
+	case "sse":
+		tr, err = newSSETransport(ctx, cfg)
 	case "local", "stdio", "":
 		tr, err = newStdioTransport(ctx, cfg)
 	default:
@@ -150,17 +157,63 @@ func connectOne(ctx context.Context, name string, cfg config.MCPServer) (*conn, 
 	initCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	if err := c.initialize(initCtx); err != nil {
-		tr.Close()
-		return nil, nil, err
+		// Servidores antiguos: el POST directo da 404/405 → probar el transporte SSE.
+		if _, isHTTP := tr.(*httpTransport); isHTTP && cfg.Transport == "" && isLegacySSEError(err) {
+			tr.Close()
+			if sse, serr := newSSETransport(ctx, cfg); serr == nil {
+				c = &conn{name: name, cfg: cfg, tr: sse, byID: map[string]string{}}
+				tr, err = sse, c.initialize(initCtx)
+			}
+		}
+		if err != nil {
+			err = withStderr(tr, err)
+			tr.Close()
+			return nil, nil, err
+		}
 	}
 	listCtx, cancelList := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelList()
 	tools, err := c.listTools(listCtx)
 	if err != nil {
+		err = withStderr(tr, err)
 		tr.Close()
 		return nil, nil, err
 	}
 	return c, tools, nil
+}
+
+// withStderr añade la cola del stderr del servidor local al error: casi
+// siempre explica por qué no arrancó (paquete que falta, versión, etc.).
+func withStderr(tr transport, err error) error {
+	if st, ok := tr.(*stdioTransport); ok {
+		// el lector de stderr puede ir unos ms por detrás del cierre del proceso
+		for i := 0; i < 15 && strings.TrimSpace(st.stderr.String()) == ""; i++ {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if tail := strings.TrimSpace(st.stderr.String()); tail != "" && !strings.Contains(err.Error(), tail) {
+			return fmt.Errorf("%w\nstderr del servidor: %s", err, truncate(tail, 600))
+		}
+	}
+	return err
+}
+
+// ProbeResult resume una prueba de conexión.
+type ProbeResult struct {
+	Info    string
+	Tools   []Tool
+	Latency time.Duration
+}
+
+// Probe conecta un servidor, lista sus herramientas y lo cierra. Sirve para
+// «/mcp test» y para validar un servidor recién añadido.
+func Probe(ctx context.Context, name string, cfg config.MCPServer) (ProbeResult, error) {
+	start := time.Now()
+	c, tools, err := connectOne(ctx, name, cfg)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	defer c.tr.Close()
+	return ProbeResult{Info: c.info, Tools: tools, Latency: time.Since(start)}, nil
 }
 
 func (c *conn) initialize(ctx context.Context) error {
@@ -172,10 +225,16 @@ func (c *conn) initialize(ctx context.Context) error {
 			"version": "0.4.0",
 		},
 	}
-	var out json.RawMessage
+	var out struct {
+		ServerInfo struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"serverInfo"`
+	}
 	if err := c.tr.Call(ctx, "initialize", params, &out); err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
+	c.info = strings.TrimSpace(out.ServerInfo.Name + " " + out.ServerInfo.Version)
 	if err := c.tr.Notify(ctx, "notifications/initialized", map[string]any{}); err != nil {
 		return fmt.Errorf("initialized: %w", err)
 	}
@@ -434,6 +493,9 @@ func (e *rpcError) Error() string {
 func newStdioTransport(ctx context.Context, cfg config.MCPServer) (transport, error) {
 	if len(cfg.Command) == 0 {
 		return nil, errors.New("falta command")
+	}
+	if _, err := exec.LookPath(cfg.Command[0]); err != nil {
+		return nil, fmt.Errorf("no encuentro el comando %q en el PATH (¿está instalado node/uv/python?)", cfg.Command[0])
 	}
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
 	if cfg.Cwd != "" {
@@ -760,4 +822,10 @@ func (t *httpTransport) Close() error { return nil }
 // DecodeImage convierte una imagen MCP a bytes.
 func DecodeImage(img Image) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(img.Data)
+}
+
+// isLegacySSEError detecta las respuestas típicas de un servidor que solo habla SSE.
+func isLegacySSEError(err error) bool {
+	m := err.Error()
+	return strings.Contains(m, "MCP HTTP 404") || strings.Contains(m, "MCP HTTP 405") || strings.Contains(m, "MCP HTTP 400")
 }

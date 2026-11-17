@@ -85,6 +85,13 @@ func apiMessages(msgs []Message, plan bool) []api.ChatMessage {
 			n++
 		}
 	}
+	lastUser := -1
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			lastUser = i
+			break
+		}
+	}
 	for idx, msg := range msgs {
 		if msg.Tool != nil {
 			continue // traza visible: vive en el historial del agente
@@ -98,6 +105,9 @@ func apiMessages(msgs []Message, plan bool) []api.ChatMessage {
 		}
 		if msg.Role == "assistant" && strings.HasPrefix(text, toolTag) {
 			continue // actividad de herramientas: vive en el historial del agente
+		}
+		if msg.Role == "user" && idx == lastUser {
+			text = userTextForModel(text)
 		}
 		content := any(text)
 		if msg.Role == "user" && len(msg.Images) > 0 {
