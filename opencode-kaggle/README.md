@@ -25,7 +25,9 @@ base de datos de sesiones, caché y servicio de fondo.
 ## Requisitos
 
 - Linux o macOS con `bash` y `python3`.
-- OpenCode instalado (v2 probado con 2.3.0): <https://opencode.ai/docs/>
+- OpenCode instalado (v2 probado con 2.3.0):
+  `curl -fsSL https://opencode.ai/install | bash`
+  (<https://opencode.ai/docs/>)
 - Un endpoint compatible con OpenAI que sirva el modelo, por ejemplo:
 
   ```text

@@ -64,7 +64,8 @@ if [ -z "$SRC" ]; then
     SRC="$HOME/.opencode/bin/opencode"
   fi
 fi
-[ -n "$SRC" ] && [ -x "$SRC" ] || die "no encuentro OpenCode. Instálalo primero: https://opencode.ai/docs/  (o usa OPENCODE_BIN=/ruta/opencode)"
+[ -n "$SRC" ] && [ -x "$SRC" ] || die "no encuentro OpenCode. Instálalo primero con: curl -fsSL https://opencode.ai/install | bash  (o usa OPENCODE_BIN=/ruta/opencode)"
+echo "OpenCode: $SRC ($("$SRC" --version 2>/dev/null | head -1))"
 
 ROOT="$HOME/.local/share/opencode-kaggle"
 CONF="$HOME/.config/opencode-kaggle"
