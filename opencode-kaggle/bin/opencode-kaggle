@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# opencode-kaggle — OpenCode con un perfil aislado que apunta a un modelo
+# servido en Kaggle mediante un endpoint compatible con OpenAI.
+#
+# No comparte configuración, sesiones, caché ni estado con tu OpenCode normal.
+set -euo pipefail
+
+ROOT="${OPENCODE_KAGGLE_ROOT:-$HOME/.local/share/opencode-kaggle}"
+CONF="${OPENCODE_KAGGLE_CONFIG:-$HOME/.config/opencode-kaggle}"
+BIN="$ROOT/bin/opencode"
+
+if [ ! -x "$BIN" ]; then
+  echo "opencode-kaggle: no encuentro el binario en $BIN" >&2
+  echo "Ejecuta ./install.sh del repositorio." >&2
+  exit 1
+fi
+
+# Perfil aislado: todo lo que OpenCode guarda va a estas carpetas.
+export OPENCODE_CONFIG_DIR="$CONF"
+export OPENCODE_DB="$ROOT/opencode.db"
+export XDG_CONFIG_HOME="$CONF/xdg-config"
+export XDG_DATA_HOME="$ROOT/xdg-data"
+export XDG_STATE_HOME="$HOME/.local/state/opencode-kaggle"
+export XDG_CACHE_HOME="$HOME/.cache/opencode-kaggle"
+
+# No cargar AGENTS.md ni configuración del proyecto donde lo abras.
+export OPENCODE_DISABLE_PROJECT_CONFIG="${OPENCODE_DISABLE_PROJECT_CONFIG:-1}"
+export OPENCODE_CONFIG_PROJECT_DISABLE="${OPENCODE_CONFIG_PROJECT_DISABLE:-1}"
+
+# No tocar la instalación ni la actualización del OpenCode normal.
+export OPENCODE_DISABLE_AUTOUPDATE=1
+
+usage() {
+  cat <<EOF
+opencode-kaggle — OpenCode aislado contra un modelo de Kaggle
+
+Uso:
+  opencode-kaggle                 abre la interfaz
+  opencode-kaggle run "pregunta"  sin interfaz
+  opencode-kaggle models          modelos disponibles
+  opencode-kaggle url URL         cambia la URL del endpoint
+  opencode-kaggle key             guarda la API key (se pide por teclado)
+  opencode-kaggle help            esta ayuda
+
+Cualquier otro argumento se pasa tal cual a OpenCode.
+
+Archivos:
+  configuración  $CONF/opencode.json
+  API key        $CONF/api-key
+  sesiones       $ROOT/opencode.db
+EOF
+}
+
+case "${1:-}" in
+  help)
+    usage
+    exit 0
+    ;;
+  url)
+    if [ $# -ne 2 ]; then
+      echo "uso: opencode-kaggle url https://tu-endpoint/v1" >&2
+      exit 2
+    fi
+    python3 - "$CONF/opencode.json" "$2" <<'PY'
+import json, sys
+
+path, url = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as fh:
+    cfg = json.load(fh)
+cfg.setdefault("providers", {}).setdefault("kaggle", {}).setdefault("settings", {})["baseURL"] = url
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+print(f"URL actualizada: {url}")
+PY
+    exit 0
+    ;;
+  key)
+    if [ -t 0 ]; then
+      read -rsp "API key: " api_key
+      echo
+    else
+      api_key="$(cat)"
+    fi
+    if [ -z "$api_key" ]; then
+      echo "no se guardó nada (key vacía)" >&2
+      exit 2
+    fi
+    umask 077
+    printf '%s' "$api_key" > "$CONF/api-key"
+    echo "API key guardada en $CONF/api-key"
+    exit 0
+    ;;
+esac
+
+# Servidor privado para no mezclarse con el OpenCode normal. Solo en los
+# comandos que aceptan --standalone; el resto (debug, mcp…) se pasan tal cual.
+case "${1:-}" in
+  ""|run|mini|serve|acp|models|session)
+    exec "$BIN" --standalone "$@"
+    ;;
+esac
+
+exec "$BIN" "$@"

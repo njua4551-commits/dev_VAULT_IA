@@ -1,0 +1,36 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "kaggle/__MODEL__",
+  "policies": [
+    { "action": "provider.use", "resource": "*", "effect": "deny" },
+    { "action": "provider.use", "resource": "kaggle", "effect": "allow" }
+  ],
+  "providers": {
+    "kaggle": {
+      "name": "Kaggle (endpoint compatible con OpenAI)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "__BASE_URL__",
+        "apiKey": "{file:~/.config/opencode-kaggle/api-key}"
+      },
+      "models": {
+        "__MODEL__": {
+          "name": "__MODEL__",
+          "capabilities": {
+            "tools": true,
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
+          "compatibility": {
+            "maxTokensField": "max_tokens",
+            "streamUsage": true
+          },
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}

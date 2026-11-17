@@ -5,6 +5,7 @@ en una GPU gratuita de Kaggle, con túneles para usarlo desde tu PC.
 
 - **Nosecode**: chat con streaming, sesiones locales, temas, comandos `/up`, `/down`, `/urls` y `/status`.
 - **Dev Vault**: enciende/apaga un notebook de Kaggle que descarga Qwen y expone `llama-server` por ngrok/Tailscale.
+- **opencode-kaggle**: OpenCode con un perfil aislado que usa el mismo Vault, sin tocar tu OpenCode normal.
 - **Sin secretos en el repo**: la configuración real vive en `~/.dev-vault/config.json` y `~/.nosecode/config.json`.
 
 ## Estructura
@@ -16,6 +17,7 @@ dev-vault/             Cliente Python + notebook de Kaggle
   kaggle/notebooks/    Notebook que arranca llama-server
   configs/             Ejemplos de configuración
   instructions/        Guías de Kaggle, ngrok y Tailscale
+opencode-kaggle/       OpenCode aislado para el Vault (config + lanzador)
 ```
 
 ## Requisitos

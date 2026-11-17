@@ -1,0 +1,8 @@
+# Secretos y estado local: nunca deben acabar en el repositorio.
+api-key
+service.json
+opencode.json.bak
+xdg-config/
+xdg-data/
+node_modules/
+.DS_Store

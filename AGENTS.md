@@ -8,6 +8,8 @@ Guía breve para agentes que trabajen en este repositorio.
   endpoints OpenAI-compatibles (llama-server del Vault) y tiene herramientas
   nativas: `bash`, archivos, `grep`, captura de pantalla, `web_fetch` y memoria.
 - `dev-vault/`: scripts Python del Vault (Kaggle, túneles y `vault.py`).
+- `opencode-kaggle/`: OpenCode con perfil aislado para usar el Vault. No toca
+  la configuración ni las sesiones del OpenCode normal.
 
 ## Estado actual (2026-11-12)
 
