@@ -66,3 +66,32 @@ Guía breve para agentes que trabajen en este repositorio.
   las rutas sensibles siempre piden aprobación y los destinos locales solo se
   permiten con `permissions.webfetch_local = "allow"`.
 - No registres en `debug.log` comandos sin pasar por `redactSecrets`.
+
+## Verificación y honestidad
+
+Estas reglas vienen de fallos reales en sesiones anteriores. Son obligatorias.
+
+1. **No digas «listo» ni «probado» sin la prueba real.** Ejecuta la
+   comprobación y pega su salida. Si no la ejecutaste, di «sin verificar».
+2. **Comprueba el entorno antes de escribir rutas.** `whoami` y `echo $HOME`
+   primero. Usa `$HOME` o `~`; nunca inventes `/home/usuario` ni rutas de otro
+   equipo.
+3. **Nunca imprimas secretos.** API keys, tokens y contraseñas van redactados
+   (`sed`/`jq`) incluso al leer `config.json`; no los copies a argumentos,
+   `environment` ni al chat.
+4. **Lee la ayuda antes de adivinar.** `cmd --help` o `man cmd` para `vmrun`,
+   `git`, `docker`, etc. No inventes subcomandos ni flags.
+5. **Comprueba antes de crear.** `ls`/`test -e` sobre el archivo o carpeta y
+   respeta el nombre exacto (`mcp-vmware` ≠ `mcp_vmware`). Si ya existe, no lo
+   dupliques.
+6. **Cuenta lo que devuelve la herramienta, no lo que recuerdas.** El número
+   de tools sale de `tools/list`; el estado, de la salida real.
+7. **Valida desde el cliente real.** Un MCP no está instalado hasta que
+   funciona en Nosecode (`/mcp tools` o una sesión real), no solo con `curl`
+   o un script de Python.
+8. **No repitas comandos colgados.** Usa `timeout`, modo no interactivo y
+   cierra `stdin`. Si se colgó, explica qué esperabas antes de reintentar.
+9. **Un paso a la vez y sin pedir «continua».** Termina la tarea o di
+   exactamente qué te bloquea y qué necesitas del usuario.
+10. **Cierra con un resumen verificable:** qué cambió (archivos), qué se probó
+    (comando y salida) y qué queda pendiente.
