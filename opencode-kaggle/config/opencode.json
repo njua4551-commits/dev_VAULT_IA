@@ -11,7 +11,7 @@
       "package": "@opencode/ai/providers/openai-compatible",
       "settings": {
         "baseURL": "__BASE_URL__",
-        "apiKey": "{file:~/.config/opencode-kaggle/api-key}"
+        "apiKey": "{file:__API_KEY_FILE__}"
       },
       "models": {
         "__MODEL__": {

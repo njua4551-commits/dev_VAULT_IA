@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Instala opencode-kaggle: copia el OpenCode que ya tienes, crea un perfil
-# aislado y lo apunta a tu endpoint compatible con OpenAI servido en Kaggle.
+# Instala opencode-kaggle en Linux o macOS.
+#
+# - Si ya tienes OpenCode, copia tu binario (perfil aislado).
+# - Si no lo tienes, descarga el binario oficial para tu sistema.
+# - Crea la configuración y el lanzador.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,6 +12,7 @@ BASE_URL="${KAGGLE_BASE_URL:-}"
 MODEL="${KAGGLE_MODEL:-Qwen3.8-27B}"
 API_KEY="${KAGGLE_API_KEY:-}"
 PREFIX="${PREFIX:-$HOME/.local}"
+DOWNLOAD=0
 
 usage() {
   cat <<EOF
@@ -19,12 +23,13 @@ Opciones:
                      ejemplo: https://mi-tunel.ngrok-free.dev/v1
   --model NOMBRE     nombre del modelo (por defecto: Qwen3.8-27B)
   --api-key KEY      API key; si no se pasa, se pide por teclado
+  --download         descarga OpenCode aunque ya esté instalado
   --prefix DIR       dónde poner el lanzador (por defecto: ~/.local)
   -h, --help         esta ayuda
 
 Variables equivalentes: KAGGLE_BASE_URL, KAGGLE_MODEL, KAGGLE_API_KEY, PREFIX.
 El binario de OpenCode se toma de OPENCODE_BIN, de 'opencode' en el PATH o de
-~/.opencode/bin/opencode.
+~/.opencode/bin/opencode. Si no hay ninguno, se descarga el oficial.
 EOF
 }
 
@@ -40,6 +45,7 @@ while [ $# -gt 0 ]; do
     --api-key=*)  API_KEY="${1#*=}"; shift ;;
     --prefix)     PREFIX="${2:-}"; shift 2 ;;
     --prefix=*)   PREFIX="${1#*=}"; shift ;;
+    --download)   DOWNLOAD=1; shift ;;
     -h|--help)    usage; exit 0 ;;
     *)            usage; die "opción desconocida: $1" ;;
   esac
@@ -55,41 +61,114 @@ case "$BASE_URL" in
 esac
 [ -n "$MODEL" ] || die "el modelo no puede estar vacío"
 
-# Binario de OpenCode: no se descarga ni se redistribuye, se copia el que ya hay.
-SRC="${OPENCODE_BIN:-}"
-if [ -z "$SRC" ]; then
-  if command -v opencode >/dev/null 2>&1; then
-    SRC="$(command -v opencode)"
-  elif [ -x "$HOME/.opencode/bin/opencode" ]; then
-    SRC="$HOME/.opencode/bin/opencode"
-  fi
-fi
-[ -n "$SRC" ] && [ -x "$SRC" ] || die "no encuentro OpenCode. Instálalo primero con: curl -fsSL https://opencode.ai/install | bash  (o usa OPENCODE_BIN=/ruta/opencode)"
-echo "OpenCode: $SRC ($("$SRC" --version 2>/dev/null | head -1))"
-
 ROOT="$HOME/.local/share/opencode-kaggle"
 CONF="$HOME/.config/opencode-kaggle"
-
+BIN="$ROOT/bin/opencode"
 mkdir -p "$ROOT/bin" "$CONF" "$PREFIX/bin"
-install -m 755 "$SRC" "$ROOT/bin/opencode"
+
+# ---------------------------------------------------------------------------
+# 1. Binario de OpenCode
+# ---------------------------------------------------------------------------
+download_opencode() {
+  local os arch ext url tmp pkg found
+  os="$(uname -s)"
+  arch="$(uname -m)"
+
+  case "$os" in
+    Linux)  os=linux ;;
+    Darwin) os=darwin ;;
+    *) die "sistema no soportado: $os (usa install.ps1 en Windows)" ;;
+  esac
+
+  case "$arch" in
+    x86_64|amd64)  arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) die "arquitectura no soportada: $arch" ;;
+  esac
+
+  # Un x64 sin AVX2 necesita la variante baseline; Linux con musl, la musl.
+  if [ "$os" = linux ] && [ "$arch" = x64 ]; then
+    if ! grep -qw avx2 /proc/cpuinfo 2>/dev/null; then
+      arch="x64-baseline"
+    fi
+    if ldd --version 2>&1 | grep -qi musl || ls /lib/ld-musl-* >/dev/null 2>&1; then
+      arch="$arch-musl"
+    fi
+  fi
+
+  if [ "$os" = linux ]; then ext=tar.gz; else ext=zip; fi
+  url="https://opencode.ai/update/api/latest/cli/opencode/opencode-${os}-${arch}.${ext}"
+
+  echo "Descargando OpenCode para $os-$arch..."
+  echo "  $url"
+  tmp="$(mktemp -d)"
+  pkg="$tmp/opencode.$ext"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --progress-bar "$url" -o "$pkg"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --show-progress -O "$pkg" "$url"
+  else
+    die "necesito curl o wget para descargar OpenCode"
+  fi
+
+  mkdir -p "$tmp/x"
+  case "$ext" in
+    tar.gz) tar -xzf "$pkg" -C "$tmp/x" ;;
+    zip)
+      command -v unzip >/dev/null 2>&1 || die "necesito unzip para extraer el binario"
+      unzip -q "$pkg" -d "$tmp/x"
+      ;;
+  esac
+
+  found="$(find "$tmp/x" -type f -name opencode | head -1)"
+  [ -n "$found" ] || die "no encontré el binario dentro del archivo descargado"
+  install -m 755 "$found" "$BIN"
+  rm -rf "$tmp"
+}
+
+SRC="${OPENCODE_BIN:-}"
+if [ "$DOWNLOAD" -eq 0 ]; then
+  if [ -z "$SRC" ]; then
+    if command -v opencode >/dev/null 2>&1; then
+      SRC="$(command -v opencode)"
+    elif [ -x "$HOME/.opencode/bin/opencode" ]; then
+      SRC="$HOME/.opencode/bin/opencode"
+    fi
+  fi
+  if [ -n "$SRC" ] && [ -x "$SRC" ]; then
+    install -m 755 "$SRC" "$BIN"
+    echo "OpenCode: $SRC ($("$SRC" --version 2>/dev/null | head -1))"
+  else
+    download_opencode
+  fi
+else
+  download_opencode
+fi
+
+[ -x "$BIN" ] || die "no se pudo preparar el binario en $BIN"
+
+# ---------------------------------------------------------------------------
+# 2. Lanzador y configuración
+# ---------------------------------------------------------------------------
 install -m 755 "$HERE/bin/opencode-kaggle" "$PREFIX/bin/opencode-kaggle"
 install -m 644 "$HERE/config/cli.json" "$CONF/cli.json"
 
-# Genera opencode.json con la URL y el modelo pedidos.
 if [ -f "$CONF/opencode.json" ]; then
   cp "$CONF/opencode.json" "$CONF/opencode.json.bak"
   echo "copia de la configuración anterior: $CONF/opencode.json.bak"
 fi
-python3 - "$HERE/config/opencode.json" "$CONF/opencode.json" "$BASE_URL" "$MODEL" <<'PY'
+
+python3 - "$HERE/config/opencode.json" "$CONF/opencode.json" "$BASE_URL" "$MODEL" "$CONF/api-key" <<'PY'
 import json, sys
 
-template, dest, base_url, model = sys.argv[1:5]
+template, dest, base_url, model, key_file = sys.argv[1:6]
 with open(template, encoding="utf-8") as fh:
     cfg = json.load(fh)
 
 cfg["model"] = f"kaggle/{model}"
 provider = cfg["providers"]["kaggle"]
 provider["settings"]["baseURL"] = base_url
+provider["settings"]["apiKey"] = "{file:" + key_file + "}"
 
 placeholder = provider["models"].pop("__MODEL__")
 placeholder["name"] = model
@@ -100,7 +179,9 @@ with open(dest, "w", encoding="utf-8") as fh:
     fh.write("\n")
 PY
 
-# API key: nunca al repositorio, siempre a un archivo con permisos 600.
+# ---------------------------------------------------------------------------
+# 3. API key
+# ---------------------------------------------------------------------------
 if [ -z "$API_KEY" ] && [ ! -s "$CONF/api-key" ] && [ -t 0 ]; then
   read -rsp "API key del endpoint (Enter para dejarla vacía): " API_KEY
   echo
@@ -114,8 +195,11 @@ elif [ ! -s "$CONF/api-key" ]; then
   : > "$CONF/api-key"
   echo "AVISO: no hay API key. Guárdala luego con: opencode-kaggle key"
 fi
+chmod 600 "$CONF/api-key"
 
-# Puerto propio para el servicio de fondo, para no chocar con otro OpenCode.
+# ---------------------------------------------------------------------------
+# 4. Puerto propio del servicio de fondo
+# ---------------------------------------------------------------------------
 PORT="$(python3 - <<'PY'
 import socket
 s = socket.socket()
@@ -130,20 +214,18 @@ XDG_CONFIG_HOME="$CONF/xdg-config" \
 XDG_DATA_HOME="$ROOT/xdg-data" \
 XDG_STATE_HOME="$HOME/.local/state/opencode-kaggle" \
 XDG_CACHE_HOME="$HOME/.cache/opencode-kaggle" \
-  "$ROOT/bin/opencode" service set port "$PORT" >/dev/null 2>&1 || true
+  "$BIN" service set port "$PORT" >/dev/null 2>&1 || true
 
-cat <<EOF
-
-Listo.
-
-  lanzador   $PREFIX/bin/opencode-kaggle
-  config     $CONF/opencode.json
-  API key    $CONF/api-key
-  sesiones   $ROOT/opencode.db
-
-Prueba:
-  $PREFIX/bin/opencode-kaggle models
-  $PREFIX/bin/opencode-kaggle run "Responde solo: OK"
-
-Asegúrate de que $PREFIX/bin está en tu PATH.
-EOF
+echo
+echo "Listo."
+echo
+echo "  lanzador   $PREFIX/bin/opencode-kaggle"
+echo "  config     $CONF/opencode.json"
+echo "  API key    $CONF/api-key"
+echo "  sesiones   $ROOT/opencode.db"
+echo
+echo "Prueba:"
+echo "  $PREFIX/bin/opencode-kaggle models"
+echo "  $PREFIX/bin/opencode-kaggle run \"Responde solo: OK\""
+echo
+echo "Asegúrate de que $PREFIX/bin está en tu PATH."
