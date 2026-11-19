@@ -185,12 +185,21 @@ def stop_signature(api_key):
 
 
 # ------------------------------------------- archivos para Kaggle (notebook + config)
-def write_push_files(cfg):
+def write_push_files(cfg, test_dflash=False):
     nb_src = Path(cfg.get("notebook") or DEFAULT_NB)
     if not nb_src.exists():
         die(f"No encuentro el notebook: {nb_src}\nUsa  --notebook RUTA  en el comando init.")
     PUSH_DIR.mkdir(parents=True, exist_ok=True)
-    (PUSH_DIR / NB_NAME).write_bytes(nb_src.read_bytes())
+    notebook = nb_src.read_bytes()
+    if test_dflash:
+        nb = json.loads(notebook)
+        if not any("VAULT_TEST_DFLASH" in "".join(c.get("source", [])) for c in nb["cells"]):
+            die("El notebook configurado no admite la prueba DFlash2.")
+        cell = next(c for c in nb["cells"] if c["cell_type"] == "code")
+        cell["source"] = ["import os\n", "os.environ['VAULT_TEST_DFLASH'] = '1'\n",
+                          "".join(cell["source"])]
+        notebook = json.dumps(nb, ensure_ascii=False).encode()
+    (PUSH_DIR / NB_NAME).write_bytes(notebook)
     meta = {
         "id": ref(cfg),
         "title": cfg["slug"].replace("-", " ").title(),
@@ -366,9 +375,11 @@ def cmd_up(args):
     check_auth()
     st, _ = kernel_status(cfg)
     if st in ACTIVE:
+        if args.test_dflash:
+            die("Ya hay una sesion activa. No se ha iniciado otra prueba.")
         say(f"El notebook ya esta encendido ({st}). Busco la URL...")
     else:
-        write_push_files(cfg)
+        write_push_files(cfg, test_dflash=args.test_dflash)
         if args.sync_config:
             publish_config(cfg)
         timeout = int(float(cfg.get("max_hours", 8)) * 3600 + 3600)
@@ -801,6 +812,7 @@ def main():
     p.add_argument("--timeout", type=float, default=100, help="minutos maximos de espera (por defecto 100)")
     p.add_argument("--no-wait", action="store_true", help="solo lanza, no espera la URL")
     p.add_argument("--sync-config", action="store_true", help="vuelve a subir vault-config antes de encender")
+    p.add_argument("--test-dflash", action="store_true", help="compara Qwen3.8 con y sin DFlash2 antes de abrir los tuneles")
     p.set_defaults(fn=cmd_up)
 
     sub.add_parser("url", help="muestra la URL actual").set_defaults(fn=cmd_url)

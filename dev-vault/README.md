@@ -46,6 +46,18 @@ python client/vault.py chat                               # o: web / key / urls 
 python client/vault.py down                               # apaga y deja de gastar GPU
 ```
 
+`vault up` usa DFlash2 por defecto con Qwen3.8-27B. El 27B verifica los tokens
+del borrador y mantiene la variante de razonamiento elegida en el CLI. Si el
+borrador no está disponible, se intenta el mismo modelo al mismo contexto sin él.
+
+Con el Vault apagado, `vault up --test-dflash` inicia una comparación privada de
+Qwen3.8-27B con y sin el borrador DFlash2 Q4_0, antes de abrir el túnel. Mide
+dos generaciones de código por modo, con el mismo contexto, semilla y modelo.
+`vault logs` muestra las líneas `AB` con tok/s y tokens aceptados. Solo deja el
+borrador activo si hay aceptación y mejora más del 5 % al contexto original.
+Si falta soporte en el binario guardado, intenta compilarlo con CUDA en Kaggle.
+El siguiente `vault up` normal arranca sin la prueba.
+
 ### Instalador automatico
 
 ```
