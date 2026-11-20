@@ -18,6 +18,7 @@ fi
 # Perfil aislado: todo lo que OpenCode guarda va a estas carpetas.
 export OPENCODE_CONFIG_DIR="$CONF"
 export OPENCODE_DB="$ROOT/opencode.db"
+export OPENCODE_VAULT_LAUNCHER="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 export XDG_CONFIG_HOME="$CONF/xdg-config"
 export XDG_DATA_HOME="$ROOT/xdg-data"
 export XDG_STATE_HOME="$HOME/.local/state/opencode-kaggle"
@@ -38,6 +39,9 @@ Uso:
   opencode-kaggle                 abre la interfaz
   opencode-kaggle run "pregunta"  sin interfaz
   opencode-kaggle models          modelos disponibles
+  opencode-kaggle vault           menú de Kaggle: credenciales, túneles y GPU
+  opencode-kaggle up              configura si hace falta, enciende y conecta
+  opencode-kaggle down            apaga tu notebook
   opencode-kaggle url URL         cambia la URL del endpoint
   opencode-kaggle key             guarda la API key (se pide por teclado)
   opencode-kaggle help            esta ayuda
@@ -52,6 +56,11 @@ EOF
 }
 
 case "${1:-}" in
+  vault|up|down)
+    action="$1"; shift
+    if [ "$action" = vault ]; then action="${1:-menu}"; fi
+    exec python3 "$ROOT/vault/vault_ui.py" "$action"
+    ;;
   help)
     usage
     exit 0
@@ -95,12 +104,5 @@ PY
     ;;
 esac
 
-# Servidor privado para no mezclarse con el OpenCode normal. Solo en los
-# comandos que aceptan --standalone; el resto (debug, mcp…) se pasan tal cual.
-case "${1:-}" in
-  ""|run|mini|acp|models|session)
-    exec "$BIN" --standalone "$@"
-    ;;
-esac
-
+# El servicio gestionado usa las rutas XDG del perfil. /pair debe compartirlo con la TUI.
 exec "$BIN" "$@"

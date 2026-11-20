@@ -14,6 +14,9 @@ Uso:
   opencode-kaggle                 abre la interfaz
   opencode-kaggle run "pregunta"  sin interfaz
   opencode-kaggle models          modelos disponibles
+  opencode-kaggle vault           configura Kaggle, tuneles y GPU
+  opencode-kaggle up              configura si hace falta, enciende y conecta
+  opencode-kaggle down            apaga el notebook
   opencode-kaggle url URL         cambia la URL del endpoint
   opencode-kaggle key             guarda la API key (se pide por teclado)
   opencode-kaggle help            esta ayuda
@@ -28,6 +31,25 @@ Archivos:
 }
 
 $command = if ($args.Count -gt 0) { [string]$args[0] } else { "" }
+$env:OPENCODE_VAULT_LAUNCHER = $PSCommandPath
+$env:OPENCODE_CONFIG_DIR = $Conf
+if ($command -in @("vault", "up", "down")) {
+  $action = $command
+  if ($command -eq "vault") { $action = if ($args.Count -gt 1) { $args[1] } else { "menu" } }
+  $script = Join-Path $Root "vault\vault_ui.py"
+  $python = if (Get-Command py -ErrorAction SilentlyContinue) { "py" }
+            elseif ((Get-Command python -ErrorAction SilentlyContinue).Source -notlike "*\Microsoft\WindowsApps\*" -and (Get-Command python -ErrorAction SilentlyContinue)) { "python" }
+  if (-not $python) {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "Instala Python 3.11+ y vuelve a abrir la terminal." }
+    if ((Read-Host "El Vault necesita Python. Instalar Python 3.12 con winget ahora? [s/N]") -notin @("s","si","y","yes")) { exit 1 }
+    & winget install --id Python.Python.3.12 --exact --scope user
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $python = Join-Path $env:LocalAppData "Programs\Python\Python312\python.exe"
+    if (-not (Test-Path $python)) { throw "Python instalado. Abre una nueva terminal y repite opencode_n vault." }
+  }
+  if ($python -eq "py") { & py -3 $script $action } else { & $python $script $action }
+  exit $LASTEXITCODE
+}
 
 if ($command -eq "help") {
   Show-Usage
@@ -85,10 +107,6 @@ $env:OPENCODE_DISABLE_PROJECT_CONFIG = "1"
 $env:OPENCODE_CONFIG_PROJECT_DISABLE = "1"
 $env:OPENCODE_DISABLE_AUTOUPDATE = "1"
 
-$standalone = @("", "run", "mini", "acp", "models", "session")
-if ($args.Count -eq 0 -or $standalone -contains $command) {
-  & $Bin --standalone @args
-} else {
-  & $Bin @args
-}
+# Mantener el mismo servicio para el chat y Pair device.
+& $Bin @args
 exit $LASTEXITCODE

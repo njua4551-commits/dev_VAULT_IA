@@ -26,6 +26,7 @@ if (-not $Yes) {
 
 $aliasPath = Join-Path $Prefix "opencode_n.cmd"
 $launcher = Join-Path $Prefix "opencode-kaggle.cmd"
+if (Test-Path $launcher) { & $launcher service stop | Out-Null }
 if ((Test-Path $aliasPath) -and (Test-Path $launcher) -and (Get-FileHash $aliasPath).Hash -eq (Get-FileHash $launcher).Hash) {
   Remove-Item $aliasPath -Force
 }

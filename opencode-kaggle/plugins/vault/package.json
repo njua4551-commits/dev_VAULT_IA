@@ -1,0 +1,5 @@
+{
+  "name": "opencode-n-portable-vault",
+  "type": "module",
+  "exports": { ".": "./index.ts", "./tui": "./tui.tsx" }
+}

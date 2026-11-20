@@ -1,9 +1,11 @@
-# Nosecode + Dev Vault
+# OpenCode N + Dev Vault
 
 Cliente de terminal (TUI) para modelos OpenAI-compatibles y servidor **llama.cpp**
 en una GPU gratuita de Kaggle, con túneles para usarlo desde tu PC.
 
-- **Nosecode**: chat con streaming, sesiones locales, temas, comandos `/up`, `/down`, `/urls` y `/status`.
+> **NoseCLI (Nosecode) está desactualizado.** Se conserva como cliente histórico; su funcionamiento actual no está garantizado. Para una instalación nueva usa **`opencode_n`**.
+
+- **OpenCode N**: abre `/vault` para configurar Kaggle y tus túneles desde el CLI; `/up` enciende y conecta el modelo, `/down` lo apaga. Usa `/connect` para otras APIs y `/pair` para enlazar otro dispositivo al mismo chat.
 - **Dev Vault**: enciende/apaga un notebook de Kaggle que descarga Qwen y expone `llama-server` por ngrok/Tailscale.
 - **[Instalar `opencode_n` en otra PC](opencode-kaggle/README.md)**: perfil aislado para Linux, macOS y Windows. Usa tu Vault de Kaggle o conecta tu propia API con `/connect`.
 - **Sin secretos en el repo**: la configuración real vive en `~/.dev-vault/config.json` y `~/.nosecode/config.json`.
@@ -20,7 +22,11 @@ dev-vault/             Cliente Python + notebook de Kaggle
 opencode-kaggle/       OpenCode aislado para el Vault (config + lanzador)
 ```
 
-## Requisitos
+## Empezar con el cliente actual
+
+Descarga el repo y abre `opencode-kaggle/`. Ejecuta `bash install.sh` en Linux/macOS o `powershell -ExecutionPolicy Bypass -File .\install.ps1` en Windows. Abre `opencode_n` y escribe `/vault`. Para acceder desde el teléfono, sigue [Pair device en la misma red](opencode-kaggle/README.md#pair-device-en-la-misma-red).
+
+## Referencia del cliente histórico y configuración manual
 
 - **Go 1.24+** para compilar Nosecode.
 - **Python 3.11+** y el paquete `kaggle` (`python -m pip install kaggle`).

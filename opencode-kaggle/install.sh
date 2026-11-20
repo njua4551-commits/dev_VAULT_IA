@@ -52,7 +52,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$BASE_URL" ] && [ -t 0 ]; then
-  read -rp "URL del Vault (Enter para usar /connect o conservar tu perfil): " BASE_URL
+  read -rp "Vault ya encendido: URL (Enter para configurar después con /vault o /connect): " BASE_URL
 fi
 case "$BASE_URL" in
   ''|http://*|https://*) ;;
@@ -152,6 +152,12 @@ fi
 # 2. Lanzador y configuración
 # ---------------------------------------------------------------------------
 install -m 755 "$HERE/bin/opencode-kaggle" "$PREFIX/bin/opencode-kaggle"
+mkdir -p "$ROOT/vault"/{client,kaggle/notebooks,config} "$CONF/plugins/vault"
+install -m 644 "$HERE/vault_ui.py" "$ROOT/vault/"
+install -m 644 "$HERE/../dev-vault/client/vault.py" "$ROOT/vault/client/"
+install -m 644 "$HERE/../dev-vault/kaggle/notebooks/run-qwen-llamacpp.ipynb" "$ROOT/vault/kaggle/notebooks/"
+install -m 644 "$HERE/config/"{opencode,qwen-variants}.json "$ROOT/vault/config/"
+install -m 644 "$HERE/plugins/vault/"{package.json,index.ts,tui.tsx} "$CONF/plugins/vault/"
 if [ ! -e "$PREFIX/bin/opencode_n" ] && [ ! -L "$PREFIX/bin/opencode_n" ]; then
   ln -s opencode-kaggle "$PREFIX/bin/opencode_n"
 fi
@@ -172,6 +178,9 @@ with open(template, encoding="utf-8") as fh:
 cfg = json.loads(Path(dest).read_text(encoding="utf-8")) if Path(dest).exists() else {}
 cfg.setdefault("$schema", template_cfg["$schema"])
 cfg.setdefault("compaction", template_cfg["compaction"])
+plugin = str(Path(dest).parent / "plugins" / "vault")
+if plugin not in cfg.setdefault("plugins", []):
+    cfg["plugins"].append(plugin)
 # Migrar únicamente el bloqueo incluido en el instalador anterior.
 if cfg.get("policies") == [{"action":"provider.use","resource":"*","effect":"deny"},
                            {"action":"provider.use","resource":"kaggle","effect":"allow"}]:
@@ -243,6 +252,6 @@ echo "  API key    $CONF/api-key"
 echo "  sesiones   $ROOT/opencode.db"
 echo
 echo "Prueba:"
-echo "  $PREFIX/bin/opencode-kaggle   (usa /connect para tu API y /models para elegir)"
+echo "  $PREFIX/bin/opencode-kaggle   (/vault para Kaggle, /connect para otras APIs)"
 echo
 echo "Asegúrate de que $PREFIX/bin está en tu PATH."

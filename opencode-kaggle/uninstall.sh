@@ -20,6 +20,9 @@ if [ "${1:-}" != "--yes" ]; then
   esac
 fi
 
+if [ -x "$PREFIX/bin/opencode-kaggle" ]; then
+  "$PREFIX/bin/opencode-kaggle" service stop >/dev/null 2>&1 || true
+fi
 if [ -L "$PREFIX/bin/opencode_n" ] && [ "$(readlink "$PREFIX/bin/opencode_n")" = opencode-kaggle ]; then
   rm -f "$PREFIX/bin/opencode_n"
 fi

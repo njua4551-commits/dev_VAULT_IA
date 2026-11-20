@@ -27,7 +27,7 @@ if (-not $Model) { $Model = "Qwen3.8-27B" }
 if (-not $Prefix) { $Prefix = Join-Path $HOME ".local\bin" }
 
 if (-not $BaseUrl) {
-  $BaseUrl = Read-Host "URL del Vault (Enter para usar /connect o conservar tu perfil)"
+  $BaseUrl = Read-Host "Vault ya encendido: URL (Enter para configurar despues con /vault o /connect)"
 }
 if ($BaseUrl -and $BaseUrl -notmatch '^https?://') { Die "la URL debe empezar por http:// o https://" }
 
@@ -92,6 +92,16 @@ if (-not (Get-Command opencode_n -ErrorAction SilentlyContinue) -and -not (Test-
   Copy-Item (Join-Path $PSScriptRoot "bin\opencode-kaggle.cmd") (Join-Path $Prefix "opencode_n.cmd")
 }
 Copy-Item (Join-Path $PSScriptRoot "config\cli.json") (Join-Path $Conf "cli.json") -Force
+$bundle = Join-Path $Root "vault"
+$plugin = Join-Path $Conf "plugins\vault"
+foreach ($dir in @("$bundle\client", "$bundle\kaggle\notebooks", "$bundle\config", $plugin)) {
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+}
+Copy-Item "$PSScriptRoot\vault_ui.py" $bundle -Force
+Copy-Item "$PSScriptRoot\..\dev-vault\client\vault.py" "$bundle\client" -Force
+Copy-Item "$PSScriptRoot\..\dev-vault\kaggle\notebooks\run-qwen-llamacpp.ipynb" "$bundle\kaggle\notebooks" -Force
+Copy-Item "$PSScriptRoot\config\opencode.json","$PSScriptRoot\config\qwen-variants.json" "$bundle\config" -Force
+Copy-Item "$PSScriptRoot\plugins\vault\*" $plugin -Force
 
 $confPath = Join-Path $Conf "opencode.json"
 if (Test-Path $confPath) {
@@ -102,6 +112,10 @@ if (Test-Path $confPath) {
 $tpl = Get-Content (Join-Path $PSScriptRoot "config\opencode.json") -Raw | ConvertFrom-Json
 $cfg = if (Test-Path $confPath) { Get-Content $confPath -Raw | ConvertFrom-Json } else { [PSCustomObject]@{'$schema'=$tpl.'$schema'} }
 if (-not $cfg.compaction) { $cfg | Add-Member -NotePropertyName compaction -NotePropertyValue $tpl.compaction -Force }
+if ($cfg.plugins -notcontains $plugin) {
+  $plugins = @($cfg.plugins | Where-Object { $_ }) + @($plugin)
+  $cfg | Add-Member -NotePropertyName plugins -NotePropertyValue $plugins -Force
+}
 $rules = @($cfg.policies)
 if ($rules.Count -eq 2 -and $rules[0].action -eq 'provider.use' -and $rules[0].resource -eq '*' -and $rules[0].effect -eq 'deny' -and
     $rules[1].action -eq 'provider.use' -and $rules[1].resource -eq 'kaggle' -and $rules[1].effect -eq 'allow' -and
@@ -182,4 +196,4 @@ if ($pathAdded) {
   Write-Host "Añadí $Prefix al PATH de usuario: abre una terminal nueva para usarlo." -ForegroundColor Yellow
 }
 Write-Host "Prueba:"
-Write-Host "  opencode-kaggle   (usa /connect para tu API y /models para elegir)"
+Write-Host "  opencode-kaggle   (/vault para Kaggle, /connect para otras APIs)"
