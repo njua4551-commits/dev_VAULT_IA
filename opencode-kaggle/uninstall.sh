@@ -20,6 +20,9 @@ if [ "${1:-}" != "--yes" ]; then
   esac
 fi
 
+if [ -L "$PREFIX/bin/opencode_n" ] && [ "$(readlink "$PREFIX/bin/opencode_n")" = opencode-kaggle ]; then
+  rm -f "$PREFIX/bin/opencode_n"
+fi
 rm -f "$PREFIX/bin/opencode-kaggle"
 rm -rf "$CONF" "$ROOT" "$HOME/.local/state/opencode-kaggle" "$HOME/.cache/opencode-kaggle"
 echo "desinstalado"

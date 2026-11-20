@@ -67,7 +67,9 @@ import json, sys
 path, url = sys.argv[1], sys.argv[2]
 with open(path, encoding="utf-8") as fh:
     cfg = json.load(fh)
-cfg.setdefault("providers", {}).setdefault("kaggle", {}).setdefault("settings", {})["baseURL"] = url
+if "kaggle" not in cfg.get("providers", {}):
+    sys.exit("Para añadir Kaggle por primera vez: ./install.sh --base-url URL")
+cfg["providers"]["kaggle"]["settings"]["baseURL"] = url
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(cfg, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
@@ -96,7 +98,7 @@ esac
 # Servidor privado para no mezclarse con el OpenCode normal. Solo en los
 # comandos que aceptan --standalone; el resto (debug, mcp…) se pasan tal cual.
 case "${1:-}" in
-  ""|run|mini|serve|acp|models|session)
+  ""|run|mini|acp|models|session)
     exec "$BIN" --standalone "$@"
     ;;
 esac

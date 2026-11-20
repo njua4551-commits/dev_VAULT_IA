@@ -16,10 +16,10 @@ DOWNLOAD=0
 
 usage() {
   cat <<EOF
-Uso: ./install.sh --base-url URL [opciones]
+Uso: ./install.sh [--base-url URL] [opciones]
 
 Opciones:
-  --base-url URL     endpoint compatible con OpenAI (obligatorio)
+  --base-url URL     endpoint del Vault (opcional; sin él usa /connect)
                      ejemplo: https://mi-tunel.ngrok-free.dev/v1
   --model NOMBRE     nombre del modelo (por defecto: Qwen3.8-27B)
   --api-key KEY      API key; si no se pasa, se pide por teclado
@@ -52,11 +52,10 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$BASE_URL" ] && [ -t 0 ]; then
-  read -rp "URL del endpoint compatible con OpenAI (https://.../v1): " BASE_URL
+  read -rp "URL del Vault (Enter para usar /connect o conservar tu perfil): " BASE_URL
 fi
-[ -n "$BASE_URL" ] || die "falta --base-url (o KAGGLE_BASE_URL)"
 case "$BASE_URL" in
-  http://*|https://*) ;;
+  ''|http://*|https://*) ;;
   *) die "la URL debe empezar por http:// o https://" ;;
 esac
 [ -n "$MODEL" ] || die "el modelo no puede estar vacío"
@@ -70,7 +69,7 @@ mkdir -p "$ROOT/bin" "$CONF" "$PREFIX/bin"
 # 1. Binario de OpenCode
 # ---------------------------------------------------------------------------
 download_opencode() {
-  local os arch ext url tmp pkg found
+  local os arch url tmp pkg found
   os="$(uname -s)"
   arch="$(uname -m)"
 
@@ -96,13 +95,21 @@ download_opencode() {
     fi
   fi
 
-  if [ "$os" = linux ]; then ext=tar.gz; else ext=zip; fi
-  url="https://opencode.ai/update/api/latest/cli/opencode/opencode-${os}-${arch}.${ext}"
+  if [ "$os-$arch" = darwin-x64 ] && [ "$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)" != 1 ]; then arch=x64-baseline; fi
+  url="$(python3 - "$os-$arch" <<'PY'
+import json, sys, urllib.request
+with urllib.request.urlopen("https://registry.npmjs.org/@opencode%2fcli-" + sys.argv[1] + "/latest", timeout=30) as r:
+    release = json.load(r)
+if not release["version"].startswith("2."):
+    sys.exit("El instalador necesita OpenCode V2")
+print(release["dist"]["tarball"])
+PY
+)"
 
   echo "Descargando OpenCode para $os-$arch..."
   echo "  $url"
   tmp="$(mktemp -d)"
-  pkg="$tmp/opencode.$ext"
+  pkg="$tmp/opencode.tgz"
   if command -v curl >/dev/null 2>&1; then
     curl -fL --progress-bar "$url" -o "$pkg"
   elif command -v wget >/dev/null 2>&1; then
@@ -112,13 +119,7 @@ download_opencode() {
   fi
 
   mkdir -p "$tmp/x"
-  case "$ext" in
-    tar.gz) tar -xzf "$pkg" -C "$tmp/x" ;;
-    zip)
-      command -v unzip >/dev/null 2>&1 || die "necesito unzip para extraer el binario"
-      unzip -q "$pkg" -d "$tmp/x"
-      ;;
-  esac
+  tar -xzf "$pkg" -C "$tmp/x"
 
   found="$(find "$tmp/x" -type f -name opencode | head -1)"
   [ -n "$found" ] || die "no encontré el binario dentro del archivo descargado"
@@ -135,7 +136,7 @@ if [ "$DOWNLOAD" -eq 0 ]; then
       SRC="$HOME/.opencode/bin/opencode"
     fi
   fi
-  if [ -n "$SRC" ] && [ -x "$SRC" ]; then
+  if [ -n "$SRC" ] && [ -x "$SRC" ] && [[ "$("$SRC" --version 2>/dev/null)" =~ (^|[[:space:]])v?2\. ]]; then
     install -m 755 "$SRC" "$BIN"
     echo "OpenCode: $SRC ($("$SRC" --version 2>/dev/null | head -1))"
   else
@@ -151,6 +152,9 @@ fi
 # 2. Lanzador y configuración
 # ---------------------------------------------------------------------------
 install -m 755 "$HERE/bin/opencode-kaggle" "$PREFIX/bin/opencode-kaggle"
+if [ ! -e "$PREFIX/bin/opencode_n" ] && [ ! -L "$PREFIX/bin/opencode_n" ]; then
+  ln -s opencode-kaggle "$PREFIX/bin/opencode_n"
+fi
 install -m 644 "$HERE/config/cli.json" "$CONF/cli.json"
 
 if [ -f "$CONF/opencode.json" ]; then
@@ -160,19 +164,31 @@ fi
 
 python3 - "$HERE/config/opencode.json" "$CONF/opencode.json" "$BASE_URL" "$MODEL" "$CONF/api-key" <<'PY'
 import json, sys
+from pathlib import Path
 
 template, dest, base_url, model, key_file = sys.argv[1:6]
 with open(template, encoding="utf-8") as fh:
-    cfg = json.load(fh)
+    template_cfg = json.load(fh)
+cfg = json.loads(Path(dest).read_text(encoding="utf-8")) if Path(dest).exists() else {}
+cfg.setdefault("$schema", template_cfg["$schema"])
+cfg.setdefault("compaction", template_cfg["compaction"])
+# Migrar únicamente el bloqueo incluido en el instalador anterior.
+if cfg.get("policies") == [{"action":"provider.use","resource":"*","effect":"deny"},
+                           {"action":"provider.use","resource":"kaggle","effect":"allow"}]:
+    del cfg["policies"]
 
-cfg["model"] = f"kaggle/{model}"
-provider = cfg["providers"]["kaggle"]
-provider["settings"]["baseURL"] = base_url
-provider["settings"]["apiKey"] = "{file:" + key_file + "}"
-
-placeholder = provider["models"].pop("__MODEL__")
-placeholder["name"] = model
-provider["models"][model] = placeholder
+if base_url:
+    cfg["model"] = f"kaggle/{model}"
+    defaults = template_cfg["providers"]["kaggle"]
+    placeholder = defaults["models"].pop("__MODEL__")
+    provider = cfg.setdefault("providers", {}).setdefault("kaggle", defaults)
+    provider.setdefault("settings", {}).update(baseURL=base_url, apiKey="{file:" + key_file + "}")
+    placeholder["name"] = model
+    entry = provider.setdefault("models", {}).setdefault(model, placeholder)
+    if model == "Qwen3.8-27B":
+        entry.setdefault("variants", json.loads(Path(template).with_name("qwen-variants.json").read_text()))
+        entry.setdefault("capabilities", {}).setdefault("reasoning", {"supported": True})
+        entry.setdefault("compatibility", {}).setdefault("reasoningField", "reasoning_content")
 
 with open(dest, "w", encoding="utf-8") as fh:
     json.dump(cfg, fh, indent=2, ensure_ascii=False)
@@ -182,6 +198,7 @@ PY
 # ---------------------------------------------------------------------------
 # 3. API key
 # ---------------------------------------------------------------------------
+if [ -n "$BASE_URL" ]; then
 if [ -z "$API_KEY" ] && [ ! -s "$CONF/api-key" ] && [ -t 0 ]; then
   read -rsp "API key del endpoint (Enter para dejarla vacía): " API_KEY
   echo
@@ -196,6 +213,7 @@ elif [ ! -s "$CONF/api-key" ]; then
   echo "AVISO: no hay API key. Guárdala luego con: opencode-kaggle key"
 fi
 chmod 600 "$CONF/api-key"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Puerto propio del servicio de fondo
@@ -225,7 +243,6 @@ echo "  API key    $CONF/api-key"
 echo "  sesiones   $ROOT/opencode.db"
 echo
 echo "Prueba:"
-echo "  $PREFIX/bin/opencode-kaggle models"
-echo "  $PREFIX/bin/opencode-kaggle run \"Responde solo: OK\""
+echo "  $PREFIX/bin/opencode-kaggle   (usa /connect para tu API y /models para elegir)"
 echo
 echo "Asegúrate de que $PREFIX/bin está en tu PATH."

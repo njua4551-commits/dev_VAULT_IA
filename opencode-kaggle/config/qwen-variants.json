@@ -1,0 +1,6 @@
+[
+  { "id": "off", "body": { "chat_template_kwargs": { "enable_thinking": false }, "temperature": 0.7, "top_p": 0.8, "top_k": 20 } },
+  { "id": "low", "body": { "chat_template_kwargs": { "enable_thinking": true }, "reasoning_effort": "low", "temperature": 1.0, "top_p": 0.95, "top_k": 20 } },
+  { "id": "medium", "body": { "chat_template_kwargs": { "enable_thinking": true }, "reasoning_effort": "medium", "temperature": 1.0, "top_p": 0.95, "top_k": 20 } },
+  { "id": "high", "body": { "chat_template_kwargs": { "enable_thinking": true }, "reasoning_effort": "xhigh", "temperature": 1.0, "top_p": 0.95, "top_k": 20 } }
+]

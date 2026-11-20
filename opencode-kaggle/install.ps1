@@ -27,10 +27,9 @@ if (-not $Model) { $Model = "Qwen3.8-27B" }
 if (-not $Prefix) { $Prefix = Join-Path $HOME ".local\bin" }
 
 if (-not $BaseUrl) {
-  $BaseUrl = Read-Host "URL del endpoint compatible con OpenAI (https://.../v1)"
+  $BaseUrl = Read-Host "URL del Vault (Enter para usar /connect o conservar tu perfil)"
 }
-if (-not $BaseUrl) { Die "falta -BaseUrl" }
-if ($BaseUrl -notmatch '^https?://') { Die "la URL debe empezar por http:// o https://" }
+if ($BaseUrl -and $BaseUrl -notmatch '^https?://') { Die "la URL debe empezar por http:// o https://" }
 
 $Root = Join-Path $HOME ".local\share\opencode-kaggle"
 $Conf = Join-Path $HOME ".config\opencode-kaggle"
@@ -53,18 +52,30 @@ if (-not $Download -and -not $src) {
   if (Test-Path $candidate) { $src = $candidate }
 }
 
+$v2 = $false
 if (-not $Download -and $src -and (Test-Path $src)) {
+  $v2 = ((& $src --version) -match '(^|\s)v?2\.')
+}
+if ($v2) {
   Copy-Item $src $Bin -Force
   Write-Host "OpenCode: $src"
 } else {
-  $url = "https://opencode.ai/update/api/latest/cli/opencode/opencode-windows-$arch.zip"
+  if ($arch -eq "x64") {
+    $cpu = Add-Type -Name CpuFeature -Namespace OpenCodeKaggle -PassThru -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int feature);'
+    if (-not $cpu::IsProcessorFeaturePresent(40)) { $arch = "x64-baseline" }
+  }
+  $release = Invoke-RestMethod -Uri "https://registry.npmjs.org/@opencode%2fcli-windows-$arch/latest"
+  if ($release.version -notmatch '^2\.') { Die "El instalador necesita OpenCode V2" }
+  $url = $release.dist.tarball
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ("opencode-" + [Guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $tmp | Out-Null
-  $zip = Join-Path $tmp "opencode.zip"
+  $zip = Join-Path $tmp "opencode.tgz"
   Write-Host "Descargando OpenCode para windows-$arch..."
   Write-Host "  $url"
   Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-  Expand-Archive -Path $zip -DestinationPath (Join-Path $tmp "x") -Force
+  New-Item -ItemType Directory -Path (Join-Path $tmp "x") | Out-Null
+  tar.exe -xzf $zip -C (Join-Path $tmp "x")
+  if ($LASTEXITCODE -ne 0) { Die "No se pudo extraer el paquete oficial" }
   $exe = Get-ChildItem (Join-Path $tmp "x") -Recurse -Filter "opencode.exe" | Select-Object -First 1
   if (-not $exe) { Die "no encontré opencode.exe en el archivo descargado" }
   Copy-Item $exe.FullName $Bin -Force
@@ -77,6 +88,9 @@ if (-not (Test-Path $Bin)) { Die "no se pudo preparar el binario en $Bin" }
 # 2. Lanzador y configuración.
 Copy-Item (Join-Path $PSScriptRoot "bin\opencode-kaggle.ps1") (Join-Path $Prefix "opencode-kaggle.ps1") -Force
 Copy-Item (Join-Path $PSScriptRoot "bin\opencode-kaggle.cmd") (Join-Path $Prefix "opencode-kaggle.cmd") -Force
+if (-not (Get-Command opencode_n -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $Prefix "opencode_n.cmd"))) {
+  Copy-Item (Join-Path $PSScriptRoot "bin\opencode-kaggle.cmd") (Join-Path $Prefix "opencode_n.cmd")
+}
 Copy-Item (Join-Path $PSScriptRoot "config\cli.json") (Join-Path $Conf "cli.json") -Force
 
 $confPath = Join-Path $Conf "opencode.json"
@@ -85,25 +99,41 @@ if (Test-Path $confPath) {
   Write-Host "copia de la configuración anterior: $confPath.bak"
 }
 
-$cfg = Get-Content (Join-Path $PSScriptRoot "config\opencode.json") -Raw | ConvertFrom-Json
-$cfg.model = "kaggle/$Model"
-$cfg.providers.kaggle.settings.baseURL = $BaseUrl
-
+$tpl = Get-Content (Join-Path $PSScriptRoot "config\opencode.json") -Raw | ConvertFrom-Json
+$cfg = if (Test-Path $confPath) { Get-Content $confPath -Raw | ConvertFrom-Json } else { [PSCustomObject]@{'$schema'=$tpl.'$schema'} }
+if (-not $cfg.compaction) { $cfg | Add-Member -NotePropertyName compaction -NotePropertyValue $tpl.compaction -Force }
+$rules = @($cfg.policies)
+if ($rules.Count -eq 2 -and $rules[0].action -eq 'provider.use' -and $rules[0].resource -eq '*' -and $rules[0].effect -eq 'deny' -and
+    $rules[1].action -eq 'provider.use' -and $rules[1].resource -eq 'kaggle' -and $rules[1].effect -eq 'allow' -and
+    @($rules[0].PSObject.Properties).Count -eq 3 -and @($rules[1].PSObject.Properties).Count -eq 3) {
+  $cfg.PSObject.Properties.Remove('policies')
+}
 $keyPath = Join-Path $Conf "api-key"
-$cfg.providers.kaggle.settings.apiKey = "{file:" + ($keyPath -replace '\\', '/') + "}"
-
-$placeholder = $cfg.providers.kaggle.models.'__MODEL__'
-$placeholder.name = $Model
-$models = New-Object PSObject
-$models | Add-Member -MemberType NoteProperty -Name $Model -Value $placeholder
-$cfg.providers.kaggle.models = $models
+if ($BaseUrl) {
+  $cfg | Add-Member -NotePropertyName model -NotePropertyValue "kaggle/$Model" -Force
+  if (-not $cfg.providers) { $cfg | Add-Member -NotePropertyName providers -NotePropertyValue ([PSCustomObject]@{}) -Force }
+  $placeholder = $tpl.providers.kaggle.models.'__MODEL__'
+  $placeholder.name = $Model
+  $tpl.providers.kaggle.models.PSObject.Properties.Remove('__MODEL__')
+  if (-not $cfg.providers.kaggle) { $cfg.providers | Add-Member -NotePropertyName kaggle -NotePropertyValue $tpl.providers.kaggle }
+  $provider = $cfg.providers.kaggle
+  $provider.settings | Add-Member -NotePropertyName baseURL -NotePropertyValue $BaseUrl -Force
+  $provider.settings | Add-Member -NotePropertyName apiKey -NotePropertyValue ("{file:" + ($keyPath -replace '\\', '/') + "}") -Force
+  if (-not $provider.models.PSObject.Properties[$Model]) { $provider.models | Add-Member -NotePropertyName $Model -NotePropertyValue $placeholder }
+  if ($Model -eq "Qwen3.8-27B") {
+    $entry = $provider.models.$Model
+    if (-not $entry.variants) { $entry | Add-Member -NotePropertyName variants -NotePropertyValue (Get-Content (Join-Path $PSScriptRoot 'config\qwen-variants.json') -Raw | ConvertFrom-Json) }
+    if (-not $entry.capabilities.reasoning) { $entry.capabilities | Add-Member -NotePropertyName reasoning -NotePropertyValue @{supported=$true} }
+    if (-not $entry.compatibility.reasoningField) { $entry.compatibility | Add-Member -NotePropertyName reasoningField -NotePropertyValue 'reasoning_content' }
+  }
+}
 
 $json = $cfg | ConvertTo-Json -Depth 20
 [IO.File]::WriteAllText($confPath, $json, (New-Object Text.UTF8Encoding($false)))
 
 # 3. API key (archivo aparte, sin BOM ni salto de línea).
 $haveKey = (Test-Path $keyPath) -and ((Get-Item $keyPath).Length -gt 0)
-if (-not $ApiKey -and -not $haveKey) {
+if ($BaseUrl -and -not $ApiKey -and -not $haveKey) {
   $sec = Read-Host -AsSecureString "API key del endpoint (Enter para dejarla vacía)"
   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
   try {
@@ -112,11 +142,11 @@ if (-not $ApiKey -and -not $haveKey) {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
   }
 }
-if ($ApiKey) {
+if ($BaseUrl -and $ApiKey) {
   [IO.File]::WriteAllText($keyPath, $ApiKey, (New-Object Text.UTF8Encoding($false)))
   Write-Host "API key guardada en $keyPath"
   try { icacls $keyPath /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null } catch {}
-} elseif (-not $haveKey) {
+} elseif ($BaseUrl -and -not $haveKey) {
   [IO.File]::WriteAllText($keyPath, "", (New-Object Text.UTF8Encoding($false)))
   Write-Host "AVISO: no hay API key. Guárdala luego con: opencode-kaggle key" -ForegroundColor Yellow
 }
@@ -152,5 +182,4 @@ if ($pathAdded) {
   Write-Host "Añadí $Prefix al PATH de usuario: abre una terminal nueva para usarlo." -ForegroundColor Yellow
 }
 Write-Host "Prueba:"
-Write-Host "  opencode-kaggle models"
-Write-Host "  opencode-kaggle run `"Responde solo: OK`""
+Write-Host "  opencode-kaggle   (usa /connect para tu API y /models para elegir)"

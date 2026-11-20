@@ -1,177 +1,39 @@
-# opencode-kaggle
+# opencode_n portátil
 
-OpenCode ejecutado con un **perfil aislado** que apunta a un modelo servido en
-**Kaggle** a través de un endpoint compatible con OpenAI (por ejemplo
-`llama-server` de llama.cpp, vLLM u Ollama expuestos con un túnel).
+Un perfil aislado de OpenCode V2 para **tu propio Vault de Kaggle, otros proveedores con tu API, o ambos**. No hace falta compilar OpenCode ni editar JSON. La instalación no incluye cuentas, sesiones, claves ni MCP de otra persona.
 
-No modifica tu OpenCode normal: usa su propio binario, configuración, base de
-datos de sesiones, caché y servicio de fondo.
+## Instalar en otra PC
 
-Instalador para **Linux, macOS y Windows**.
+[Descarga el ZIP](https://github.com/njua4551-commits/dev_VAULT_IA/archive/refs/heads/main.zip), descomprímelo y abre una terminal **dentro de `opencode-kaggle`**. También puedes clonar el repositorio con Git.
 
-> OpenCode is [MIT-licensed](https://github.com/sst/opencode) software. This
-> repository only contains configuration and a small installer/launcher; it
-> does not redistribute OpenCode, models, API keys or third-party MCP servers.
+| Sistema | Comando |
+|---|---|
+| Linux o macOS (x64/ARM64, Bash, Python 3 y `tar`) | `bash install.sh` |
+| Windows 10/11 (x64/ARM64, PowerShell y `tar.exe`) | `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1` |
 
-## Qué hace
+El instalador reutiliza OpenCode V2 si lo encuentra; si no, descarga el paquete oficial para tu plataforma. Necesitas Internet para descargar y para usar una API remota.
 
-- Usa tu OpenCode si ya lo tienes; si no, descarga el binario oficial para tu
-  sistema desde `opencode.ai` (~120 MB).
-- Lo copia a `~/.local/share/opencode-kaggle/bin/` para que sea independiente.
-- Crea un perfil aparte en `~/.config/opencode-kaggle`.
-- Registra un único proveedor (`kaggle`) y bloquea todos los demás, para que no
-  aparezcan modelos de otros proveedores.
-- Aísla `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` y
-  `XDG_CACHE_HOME`, y desactiva la configuración e instrucciones del proyecto.
-- Usa un servidor privado (`--standalone`) y un puerto de servicio propio.
-- Deja la API key en un archivo aparte, nunca en el JSON ni en el repositorio.
+1. **Solo API propia:** deja vacía la URL de Kaggle pulsando Enter. Abre `opencode_n`, escribe `/connect`, elige tu proveedor e introduce tu clave. Después usa `/models` para elegir el modelo.
+2. **Con Kaggle:** introduce la URL de **tu servidor de inferencia** (`https://tu-tunel/v1`) y la clave de **ese endpoint**, no el token de tu cuenta de Kaggle. Se selecciona Qwen3.8-27B por defecto. Puedes conectar otras APIs con `/connect` y cambiar con `/models`. Para encender tu propio Vault, consulta la [guía del servidor](../dev-vault/instructions/client-guide.md).
 
-## Requisitos
-
-- **Linux/macOS:** `bash`, `python3` y `curl` o `wget` (macOS: `unzip`).
-- **Windows 10/11:** PowerShell 5.1 o superior (viene incluido).
-- Un endpoint compatible con OpenAI que sirva el modelo, por ejemplo:
-
-  ```text
-  https://tu-tunel.ngrok-free.dev/v1
-  ```
-
-  y su API key.
-
-No hace falta tener OpenCode instalado: el instalador lo descarga si falta.
-
-## Instalar
-
-### Linux y macOS
-
-```bash
-cd opencode-kaggle
-./install.sh --base-url https://tu-tunel.ngrok-free.dev/v1 --model Qwen3.8-27B
-```
-
-### Windows
-
-```powershell
-cd opencode-kaggle
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -BaseUrl https://tu-tunel.ngrok-free.dev/v1 -Model Qwen3.8-27B
-```
-
-Los dos piden la API key si no se la pasas. También aceptan variables de
-entorno: `KAGGLE_BASE_URL`, `KAGGLE_MODEL` y `KAGGLE_API_KEY`.
-
-Opciones equivalentes:
-
-| Linux/macOS | Windows | Por defecto | Qué hace |
-|---|---|---|---|
-| `--base-url URL` | `-BaseUrl URL` | — | endpoint (obligatorio) |
-| `--model NOMBRE` | `-Model NOMBRE` | `Qwen3.8-27B` | id del modelo |
-| `--api-key KEY` | `-ApiKey KEY` | se pregunta | API key |
-| `--download` | `-Download` | no | descarga OpenCode aunque ya exista |
-| `--prefix DIR` | `-Prefix DIR` | `~/.local` | dónde va el lanzador |
-
-Si ya tienes OpenCode, se copia de `OPENCODE_BIN`, de `opencode` en el `PATH` o
-de `~/.opencode/bin/opencode`. Si no hay ninguno, se descarga la variante
-correcta: Linux glibc/musl, x64/arm64, baseline si el CPU no tiene AVX2;
-macOS arm64/x64; Windows x64/arm64.
+En Windows, abre una terminal nueva después de instalar. En Linux/macOS, si `~/.local/bin` no está en tu `PATH`, ejecuta `~/.local/bin/opencode_n`. Si ya existe otro `opencode_n`, se conserva: el comando `opencode-kaggle` abre el perfil de este instalador.
 
 ## Uso
 
-```bash
-opencode-kaggle                    # interfaz TUI
-opencode-kaggle run "pregunta"     # sin interfaz
-opencode-kaggle models             # solo debe aparecer kaggle/<modelo>
-opencode-kaggle url https://otro-tunel/v1
-opencode-kaggle key                # guarda o cambia la API key
+```sh
+opencode_n                          # interfaz
+opencode_n run "Responde solo OK"   # terminal sin interfaz
+opencode_n models                    # modelos disponibles
+opencode_n url https://tu-tunel/v1   # actualizar un Vault ya configurado
+opencode_n key                       # cambiar la clave del Vault
 ```
 
-En Windows funciona igual desde una terminal nueva (el instalador añade el
-lanzador al `PATH` de usuario).
+Puedes añadir Kaggle más adelante repitiendo el instalador con `--base-url URL` (Windows: `-BaseUrl URL`). También acepta `--model NOMBRE` / `-Model NOMBRE`, `--download` / `-Download` y las variables `KAGGLE_BASE_URL`, `KAGGLE_MODEL` y `KAGGLE_API_KEY` (clave de inferencia del Vault). Al actualizar, los ajustes anteriores quedan en `opencode.json.bak`.
 
-Cualquier otro argumento se pasa a OpenCode:
+El contexto se compacta al **80 %**. Qwen3.8-27B incluye variantes `off`, `low`, `medium` y `high`. En el perfil multiproveedor, el resumen usa el modelo de la sesión: una conversación de otro proveedor no se envía al Vault para compactarla.
 
-```bash
-opencode-kaggle run --auto "usa tus herramientas para ..."
-opencode-kaggle session list
-```
+## Archivos y desinstalación
 
-## Archivos
+La configuración y la clave del Vault están bajo `~/.config/opencode-kaggle/`; el binario y las sesiones, bajo `~/.local/share/opencode-kaggle/`. En Windows `~` es tu carpeta de usuario. Para añadir un MCP propio, usa `/mcps` o la [guía de MCP](https://opencode.ai/docs/mcp-servers).
 
-| Qué | Linux/macOS | Windows |
-|---|---|---|
-| Lanzador | `~/.local/bin/opencode-kaggle` | `%USERPROFILE%\.local\bin\opencode-kaggle.cmd` |
-| Binario | `~/.local/share/opencode-kaggle/bin/opencode` | `%USERPROFILE%\.local\share\opencode-kaggle\bin\opencode.exe` |
-| Configuración | `~/.config/opencode-kaggle/opencode.json` | `%USERPROFILE%\.config\opencode-kaggle\opencode.json` |
-| API key (600) | `~/.config/opencode-kaggle/api-key` | `%USERPROFILE%\.config\opencode-kaggle\api-key` |
-| Sesiones | `~/.local/share/opencode-kaggle/opencode.db` | `%USERPROFILE%\.local\share\opencode-kaggle\opencode.db` |
-
-## Cambiar modelo o límites
-
-Edita `~/.config/opencode-kaggle/opencode.json` (en Windows,
-`%USERPROFILE%\.config\opencode-kaggle\opencode.json`):
-
-```jsonc
-"model": "kaggle/Qwen3.8-27B",
-"providers": {
-  "kaggle": {
-    "settings": { "baseURL": "https://tu-tunel/v1" },
-    "models": {
-      "Qwen3.8-27B": {
-        "limit": { "context": 131072, "output": 8192 }
-      }
-    }
-  }
-}
-```
-
-Los demás proveedores están bloqueados con `policies`; si quieres usar otro,
-añádelo y permite su `provider.use` en esa lista.
-
-## Añadir MCP
-
-Este repositorio no incluye servidores MCP. Puedes añadir los tuyos en
-`opencode.json`:
-
-```jsonc
-"mcp": {
-  "servers": {
-    "mi-mcp": {
-      "type": "local",
-      "command": ["node", "/ruta/a/mi-mcp/server.js"]
-    }
-  }
-}
-```
-
-Documentación: <https://opencode.ai/docs/mcp>
-
-## Problemas típicos
-
-| Síntoma | Causa |
-|---|---|
-| `HTTP 404` o `ERR_NGROK_3200` | el túnel está caído o cambió de URL: `opencode-kaggle url ...` |
-| `HTTP 401` | API key incorrecta: `opencode-kaggle key` |
-| `Connection refused` | el endpoint no está escuchando o la URL no termina en `/v1` |
-| No aparece el modelo | revisa el id exacto en `/v1/models` del endpoint |
-| `no encuentro el binario` | vuelve a ejecutar el instalador |
-| En Windows no encuentra `opencode-kaggle` | abre una terminal nueva (se actualizó el `PATH`) |
-| El binario descargado no arranca en Linux | CPU sin AVX2 o musl: el instalador ya elige la variante; prueba `--download` de nuevo |
-
-## Desinstalar
-
-```bash
-./uninstall.sh
-```
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
-```
-
-Borra el lanzador, el perfil, las sesiones y la caché. No toca tu OpenCode
-normal.
-
-## Licencia
-
-MIT. Ver [LICENSE](LICENSE).
-
-OpenCode es un proyecto independiente bajo licencia MIT
-(<https://github.com/sst/opencode>). Este repositorio no lo redistribuye.
+`bash uninstall.sh` o `powershell -ExecutionPolicy Bypass -File .\uninstall.ps1` eliminan este perfil, incluidas sus sesiones. OpenCode se distribuye por separado; el instalador y lanzador tienen [licencia MIT](LICENSE).

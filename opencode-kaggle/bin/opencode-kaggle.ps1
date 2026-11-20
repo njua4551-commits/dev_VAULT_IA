@@ -41,6 +41,7 @@ if ($command -eq "url") {
   }
   $confPath = Join-Path $Conf "opencode.json"
   $cfg = Get-Content $confPath -Raw | ConvertFrom-Json
+  if (-not $cfg.providers.kaggle) { throw "Para añadir Kaggle por primera vez: .\install.ps1 -BaseUrl URL" }
   $cfg.providers.kaggle.settings.baseURL = [string]$args[1]
   $json = $cfg | ConvertTo-Json -Depth 20
   [IO.File]::WriteAllText($confPath, $json, (New-Object Text.UTF8Encoding($false)))
@@ -84,7 +85,7 @@ $env:OPENCODE_DISABLE_PROJECT_CONFIG = "1"
 $env:OPENCODE_CONFIG_PROJECT_DISABLE = "1"
 $env:OPENCODE_DISABLE_AUTOUPDATE = "1"
 
-$standalone = @("", "run", "mini", "serve", "acp", "models", "session")
+$standalone = @("", "run", "mini", "acp", "models", "session")
 if ($args.Count -eq 0 -or $standalone -contains $command) {
   & $Bin --standalone @args
 } else {

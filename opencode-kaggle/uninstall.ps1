@@ -24,7 +24,12 @@ if (-not $Yes) {
   }
 }
 
-Remove-Item (Join-Path $Prefix "opencode-kaggle.cmd"), (Join-Path $Prefix "opencode-kaggle.ps1") -Force -ErrorAction SilentlyContinue
+$aliasPath = Join-Path $Prefix "opencode_n.cmd"
+$launcher = Join-Path $Prefix "opencode-kaggle.cmd"
+if ((Test-Path $aliasPath) -and (Test-Path $launcher) -and (Get-FileHash $aliasPath).Hash -eq (Get-FileHash $launcher).Hash) {
+  Remove-Item $aliasPath -Force
+}
+Remove-Item $launcher, (Join-Path $Prefix "opencode-kaggle.ps1") -Force -ErrorAction SilentlyContinue
 Remove-Item $Conf, $Root, $State, $Cache -Recurse -Force -ErrorAction SilentlyContinue
 
 # Quita el lanzador del PATH de usuario.
