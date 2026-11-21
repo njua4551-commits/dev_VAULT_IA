@@ -17,6 +17,7 @@ Uso:
   opencode-kaggle vault           configura Kaggle, tuneles y GPU
   opencode-kaggle up              configura si hace falta, enciende y conecta
   opencode-kaggle down            apaga el notebook
+  opencode-kaggle pair-lan        activa el acceso por red local y genera un enlace
   opencode-kaggle url URL         cambia la URL del endpoint
   opencode-kaggle key             guarda la API key (se pide por teclado)
   opencode-kaggle help            esta ayuda
@@ -108,5 +109,15 @@ $env:OPENCODE_CONFIG_PROJECT_DISABLE = "1"
 $env:OPENCODE_DISABLE_AUTOUPDATE = "1"
 
 # Mantener el mismo servicio para el chat y Pair device.
+if ($command -eq "pair-lan") {
+  $hostname = & $Bin service get hostname
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  if ($hostname -ne "0.0.0.0") {
+    & $Bin service set hostname 0.0.0.0
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  }
+  & $Bin pair
+  exit $LASTEXITCODE
+}
 & $Bin @args
 exit $LASTEXITCODE

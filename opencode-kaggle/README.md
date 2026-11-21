@@ -35,7 +35,9 @@ opencode_n key                       # cambiar la clave del Vault
 
 ## Pair device en la misma red
 
-El perfil conserva los comandos nativos de OpenCode y usa su propio servicio gestionado. Para permitir conexiones desde tu Wi-Fi, ejecuta **una vez en la PC** `opencode_n service set hostname 0.0.0.0`. Abre `/pair` dentro del chat (o `opencode_n pair` en la terminal) y abre en el celular el enlace que contiene la **IP LAN de la PC**. El enlace es de un solo uso. No necesitas ngrok para esto. Si un firewall bloquea el puerto, permite el acceso desde tu red privada. Para volver a aceptar solo conexiones locales: `opencode_n service set hostname 127.0.0.1`.
+Conecta el celular a la misma Wi-Fi y ejecuta **`opencode_n pair-lan`** en la terminal de la PC. Esto habilita el acceso por red local y OpenCode genera enlaces con las direcciones actuales del equipo: abre en el celular el que corresponde a la Wi-Fi. No necesitas escribir una IP ni configurar ngrok.
+
+Cada enlace es de un solo uso. Para vincular otro dispositivo puedes generar uno nuevo con `/pair` dentro del chat. Si un firewall bloquea el puerto, permite el acceso desde tu red privada. Para volver a aceptar solo conexiones desde la propia PC: `opencode_n service set hostname 127.0.0.1`.
 
 Puedes añadir Kaggle más adelante repitiendo el instalador con `--base-url URL` (Windows: `-BaseUrl URL`). También acepta `--model NOMBRE` / `-Model NOMBRE`, `--download` / `-Download` y las variables `KAGGLE_BASE_URL`, `KAGGLE_MODEL` y `KAGGLE_API_KEY` (clave de inferencia del Vault). Al actualizar, los ajustes anteriores quedan en `opencode.json.bak`.
 

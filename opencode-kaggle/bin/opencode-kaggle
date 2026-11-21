@@ -42,6 +42,7 @@ Uso:
   opencode-kaggle vault           menú de Kaggle: credenciales, túneles y GPU
   opencode-kaggle up              configura si hace falta, enciende y conecta
   opencode-kaggle down            apaga tu notebook
+  opencode-kaggle pair-lan        activa el acceso por red local y genera un enlace
   opencode-kaggle url URL         cambia la URL del endpoint
   opencode-kaggle key             guarda la API key (se pide por teclado)
   opencode-kaggle help            esta ayuda
@@ -56,6 +57,12 @@ EOF
 }
 
 case "${1:-}" in
+  pair-lan)
+    if [ "$("$BIN" service get hostname)" != "0.0.0.0" ]; then
+      "$BIN" service set hostname 0.0.0.0
+    fi
+    exec "$BIN" pair
+    ;;
   vault|up|down)
     action="$1"; shift
     if [ "$action" = vault ]; then action="${1:-menu}"; fi
